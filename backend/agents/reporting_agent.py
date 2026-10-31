@@ -20,11 +20,28 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
     performance = state["performance"]
     health = state["health"]
     connectivity = state["connectivity"]
+    event_context = state.get("event_context")
+    event_simulation = state.get("event_simulation")
 
     issue_by_id = {item["device_id"]: item for item in health["affected_devices"]}
-    for nearby in connectivity["blast_radius"]:
+    for nearby in connectivity["nearby_connections"]:
         if nearby["probability"] >= 0.45:
             issue_by_id[nearby["device_id"]] = nearby
+    if event_simulation:
+        for simulated in event_simulation["devices"]:
+            if simulated["severity"] == "healthy":
+                continue
+            issue_by_id[simulated["device_id"]] = {
+                "device_id": simulated["device_id"],
+                "device_type": simulated["device_type"],
+                "severity": simulated["severity"],
+                "probability": simulated["risk_probability"],
+                "connection_hops": simulated["connection_hops"],
+                "evidence": [
+                    f"Event simulation predicts {simulated['severity']} load "
+                    f"({simulated['peak_utilization']:.0%}) at {simulated['peak_minute']} minutes."
+                ],
+            }
 
     ranked = correlation["verified_causes"]
     if correlation["status"] == "needs_human":
@@ -35,6 +52,12 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
         summary = f"Top probable cause: {ranked[0]['cause']} ({ranked[0]['probability']:.0%})."
     else:
         summary = f"No abnormal telemetry found for {telemetry['device_id']}."
+    if event_simulation:
+        overloads = event_simulation["summary"]["critical"] + event_simulation["summary"]["warning"]
+        summary += (
+            f" Event what-if estimates {overloads} device(s) may be overloaded or at warning "
+            f"risk near {event_context['anchor_device_id']}."
+        )
 
     historical_context = []
     for metric, current in telemetry["metrics"].items():
@@ -56,13 +79,18 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
 
     limitations = (
         "Groq scores are weighted evidence-based confidence estimates, not calibrated statistical forecasts. "
-        "Nearby-device probability is a proximity heuristic, not evidence that the device has failed."
+        "Connection-hop risk is a topology heuristic, not evidence that a neighboring device has failed."
     )
     if correlation["scoring_method"] == "static_fallback":
         limitations = (
             "Groq scoring was not configured; cause scores use static fallback values and are "
-            "not calibrated statistical forecasts. Nearby-device probability is a proximity "
-            "heuristic, not evidence that the device has failed."
+            "not calibrated statistical forecasts. Connection-hop risk is a topology heuristic, "
+            "not evidence that a neighboring device has failed."
+        )
+    if event_simulation:
+        limitations += (
+            " Event simulation is a deterministic what-if estimate using assumed device capacities "
+            "and traffic rates; event coordinates are operator-provided context and do not locate devices."
         )
     web_research = state.get("web_research", {})
     if web_research.get("status") == "searched":
@@ -75,7 +103,8 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
             (
                 "system",
                 "Summarize only verified telemetry and findings. Do not invent causes or "
-                "change scores. State that confidence scores are not statistically calibrated.\n"
+                "change scores. Describe the event simulation only as a what-if estimate, "
+                "never as observed device health. State that confidence scores are not statistically calibrated.\n"
                 "{format_instructions}",
             ),
             ("human", "Report data: {report_data}"),
@@ -89,16 +118,24 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
                 "questions": correlation["questions"],
                 "telemetry": telemetry["metrics"],
                 "web_research": web_research,
+                "event_context": event_context,
+                "event_simulation_summary": event_simulation["summary"] if event_simulation else None,
             },
         })
         summary = narrative.summary
         limitations = narrative.limitations
+        if event_simulation:
+            limitations += (
+                " Event simulation is a deterministic what-if estimate using assumed device capacities "
+                "and traffic rates; event coordinates are operator-provided context and do not locate devices."
+            )
 
     map_statuses = {item["device_id"]: item for item in health["device_statuses"]}
-    for nearby in connectivity["blast_radius"]:
-        current = map_statuses.get(nearby["device_id"])
-        if current is None or nearby["probability"] > current["probability"]:
-            map_statuses[nearby["device_id"]] = nearby
+    questions = list(correlation["questions"])
+    if event_context is None and correlation["status"] == "needs_human":
+        questions.append(
+            "Is a crowd-gathering event happening? If yes, provide its coordinates and the serving device."
+        )
 
     report = IncidentReport(
         incident_id=telemetry["event_id"],
@@ -117,14 +154,16 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
         unverified_candidates=correlation["below_threshold_causes"],
         issue_devices=sorted(issue_by_id.values(), key=lambda item: item["probability"], reverse=True),
         device_statuses=sorted(map_statuses.values(), key=lambda item: item["probability"], reverse=True),
-        blast_radius=connectivity["blast_radius"],
+        nearby_connections=connectivity["nearby_connections"],
+        event_context=event_context,
+        event_simulation=event_simulation,
         telemetry=telemetry["metrics"],
         units=telemetry["units"],
         infrastructure_findings=[
             MetricFinding.model_validate(item) for item in state["infrastructure"]["findings"]
         ],
         historical_context=historical_context,
-        human_questions=correlation["questions"],
+        human_questions=questions,
         human_answers=state.get("human_answers", {}),
         human_review={
             "status": "pending" if correlation["status"] == "needs_human" else correlation["status"],

@@ -78,9 +78,11 @@ def run_workflow(
     history: list[dict[str, Any]] | None = None,
     telemetry_window: list[dict[str, Any]] | None = None,
     human_answers: dict[str, bool | str | float] | None = None,
-    geo_lookup: Any = None,
-    radius_km: float = 5,
+    device_inventory: list[dict[str, Any]] | None = None,
+    connection_hops: int = 3,
     llm: Any = None,
+    event_context: dict[str, Any] | None = None,
+    event_simulation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = WORKFLOW.invoke({
         "telemetry": event,
@@ -88,8 +90,10 @@ def run_workflow(
         "history": history or [],
         "telemetry_window": telemetry_window or [],
         "human_answers": human_answers or {},
-        "geo_lookup": geo_lookup,
-        "radius_km": radius_km,
+        "device_inventory": device_inventory or [],
+        "connection_hops": connection_hops,
+        "event_context": event_context,
+        "event_simulation": event_simulation,
         "llm": llm,
     })
     HEARTBEATS.update({

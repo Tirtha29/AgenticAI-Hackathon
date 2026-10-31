@@ -20,7 +20,9 @@ class IncidentReport(StrictModel):
     unverified_candidates: list[ProbableCause]
     issue_devices: list[DeviceRisk]
     device_statuses: list[DeviceRisk]
-    blast_radius: list[DeviceRisk]
+    nearby_connections: list[DeviceRisk]
+    event_context: dict[str, object] | None
+    event_simulation: dict[str, object] | None
     telemetry: dict[str, float]
     units: dict[str, str]
     infrastructure_findings: list[MetricFinding]

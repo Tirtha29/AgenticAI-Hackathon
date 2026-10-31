@@ -14,9 +14,6 @@ def health_agent(state: WorkflowState) -> dict[str, Any]:
         "device_id": event["device_id"],
         "timestamp": event["timestamp"],
         "device_type": current_device.get("device_type") or "network device",
-        "latitude": current_device.get("latitude", 0.0),
-        "longitude": current_device.get("longitude", 0.0),
-        "location_known": current_device.get("location_known", False),
         "severity": state["performance"]["severity"],
         "metrics": event["metrics"],
     })
@@ -40,8 +37,6 @@ def health_agent(state: WorkflowState) -> dict[str, Any]:
         risk = DeviceRisk(
             device_id=sample["device_id"],
             device_type=sample.get("device_type") or "network device",
-            latitude=float(sample.get("latitude") or 0),
-            longitude=float(sample.get("longitude") or 0),
             severity=severity,
             probability=0.96 if severity == "critical" else (0.78 if severity == "warning" else 0.05),
             evidence=evidence,

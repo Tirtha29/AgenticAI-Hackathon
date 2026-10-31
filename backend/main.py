@@ -18,27 +18,27 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
-from redis import Redis as SyncRedis
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from backend.common.classes.api import HumanInformationIn, ReviewIn, TelemetryIn
+from backend.common.classes.api import HumanInformationIn, ReviewIn, SimulationIn, TelemetryIn
 from backend.common.classes.event_hub import EventHub
 from backend.common.demo_inventory import build_iit_bhubaneswar_inventory
 from backend.common.metrics import ACCEPTED_UNITS, METRIC_ALIASES, METRIC_UNITS, NORMAL_RANGES
 from backend.common.rules import BASE_RULES, CAUSE_RULES, FACT_CATALOG
 from backend.graph import AGENT_RUNS, HEARTBEATS, WORKFLOW, run_workflow
+from backend.simulation import EVENT_PRESETS, run_simulation
 
 load_dotenv()
 
 DB_PATH = os.getenv("DATABASE_PATH", "./netcoop.db")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "change-this-in-production")
-BLAST_RADIUS_KM = float(os.getenv("BLAST_RADIUS_KM", "5"))
+CONNECTION_HOPS = 3
 QUEUE_STREAM = os.getenv("TELEMETRY_STREAM", "netcoop:telemetry")
-GEO_KEY = os.getenv("REDIS_GEO_KEY", "netcoop:device-coordinates")
-DEVICE_DETAILS_KEY = os.getenv("REDIS_DEVICE_DETAILS_KEY", "netcoop:device-details")
 WORKER_HEARTBEAT_KEY = os.getenv("WORKER_HEARTBEAT_KEY", "netcoop:worker:heartbeat")
+GEO_KEY = os.getenv("GEO_KEY", "netcoop:geo:devices")
+DEVICE_DETAILS_KEY = os.getenv("DEVICE_DETAILS_KEY", "netcoop:device:details")
 logger = logging.getLogger(__name__)
 redis_client: Redis | None = None
 LLM = None
@@ -65,16 +65,58 @@ def connect_db() -> Generator[sqlite3.Connection, None, None]:
         connection.close()
 
 
+def ensure_device_columns(connection: sqlite3.Connection) -> None:
+    device_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(devices)")
+    }
+    if "neighbors_json" not in device_columns:
+        connection.execute(
+            "ALTER TABLE devices ADD COLUMN neighbors_json TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "risk_probability" not in device_columns:
+        connection.execute(
+            "ALTER TABLE devices ADD COLUMN risk_probability REAL NOT NULL DEFAULT 0"
+        )
+    if "latitude" not in device_columns:
+        connection.execute("ALTER TABLE devices ADD COLUMN latitude REAL")
+    if "longitude" not in device_columns:
+        connection.execute("ALTER TABLE devices ADD COLUMN longitude REAL")
+    if "location_known" not in device_columns:
+        connection.execute("ALTER TABLE devices ADD COLUMN location_known INTEGER NOT NULL DEFAULT 0")
+
+    if {"latitude", "longitude"} & device_columns:
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS devices_topology (
+                device_id TEXT PRIMARY KEY, name TEXT, device_type TEXT, vendor TEXT,
+                status TEXT NOT NULL DEFAULT 'unknown', last_seen TEXT,
+                latitude REAL, longitude REAL, location_known INTEGER NOT NULL DEFAULT 0,
+                neighbors_json TEXT NOT NULL DEFAULT '[]',
+                risk_probability REAL NOT NULL DEFAULT 0
+            )
+        """)
+        legacy_exists = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='devices_topology'"
+        ).fetchone()
+        if legacy_exists is not None:
+            connection.execute("""
+                INSERT OR IGNORE INTO devices_topology
+                    (device_id, name, device_type, vendor, status, last_seen, latitude, longitude, location_known, neighbors_json, risk_probability)
+                SELECT device_id, name, device_type, vendor, status, last_seen, latitude, longitude, location_known, neighbors_json, risk_probability
+                FROM devices
+            """)
+            connection.execute("DROP TABLE devices")
+            connection.execute("ALTER TABLE devices_topology RENAME TO devices")
+
+
 def initialize_db() -> None:
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with connect_db() as connection:
         connection.executescript("""
             CREATE TABLE IF NOT EXISTS devices (
-                device_id TEXT PRIMARY KEY, name TEXT, latitude REAL NOT NULL,
-                longitude REAL NOT NULL, device_type TEXT, vendor TEXT,
+                device_id TEXT PRIMARY KEY, name TEXT, device_type TEXT, vendor TEXT,
                 status TEXT NOT NULL DEFAULT 'unknown', last_seen TEXT,
+                latitude REAL, longitude REAL, location_known INTEGER NOT NULL DEFAULT 0,
                 neighbors_json TEXT NOT NULL DEFAULT '[]',
-                location_known INTEGER NOT NULL DEFAULT 0,
                 risk_probability REAL NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS telemetry (
@@ -88,21 +130,7 @@ def initialize_db() -> None:
                 decision TEXT NOT NULL, feedback TEXT, reviewed_at TEXT NOT NULL
             );
         """)
-        device_columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(devices)")
-        }
-        if "neighbors_json" not in device_columns:
-            connection.execute(
-                "ALTER TABLE devices ADD COLUMN neighbors_json TEXT NOT NULL DEFAULT '[]'"
-            )
-        if "location_known" not in device_columns:
-            connection.execute(
-                "ALTER TABLE devices ADD COLUMN location_known INTEGER NOT NULL DEFAULT 0"
-            )
-        if "risk_probability" not in device_columns:
-            connection.execute(
-                "ALTER TABLE devices ADD COLUMN risk_probability REAL NOT NULL DEFAULT 0"
-            )
+        ensure_device_columns(connection)
 
 
 hub = EventHub()
@@ -168,61 +196,6 @@ def normalize_payload(payload: TelemetryIn) -> dict[str, Any]:
         "source_units": source_units,
         "severity": "healthy",
     }
-
-
-def redis_geo_lookup(longitude: float, latitude: float, radius_km: float) -> list[dict[str, Any]]:
-    with SyncRedis.from_url(REDIS_URL, decode_responses=True, socket_timeout=5) as client:
-        results = client.execute_command(
-            "GEOSEARCH",
-            GEO_KEY,
-            "FROMLONLAT",
-            longitude,
-            latitude,
-            "BYRADIUS",
-            radius_km,
-            "km",
-            "WITHDIST",
-            "WITHCOORD",
-            "ASC",
-            "COUNT",
-            200,
-        )
-        devices = []
-        for device_id, distance_km, coordinates in results:
-            details = client.hget(DEVICE_DETAILS_KEY, device_id)
-            metadata = json.loads(details) if details else {}
-            devices.append({
-                "device_id": device_id,
-                "distance_km": float(distance_km),
-                "longitude": float(coordinates[0]),
-                "latitude": float(coordinates[1]),
-                "device_type": metadata.get("device_type", "network device"),
-                "name": metadata.get("name", device_id),
-            })
-        return devices
-
-
-async def index_devices(devices: list[dict[str, Any]]) -> None:
-    if redis_client is None:
-        raise RedisError("Redis connection is not initialized")
-    async with redis_client.pipeline(transaction=False) as pipeline:
-        for device in devices:
-            pipeline.execute_command(
-                "GEOADD",
-                GEO_KEY,
-                device["longitude"],
-                device["latitude"],
-                str(device["device_id"]),
-            )
-            pipeline.hset(
-                DEVICE_DETAILS_KEY,
-                str(device["device_id"]),
-                json.dumps({
-                    "name": device["name"],
-                    "device_type": device["device_type"],
-                }),
-            )
-        await pipeline.execute()
 
 
 @asynccontextmanager
@@ -398,9 +371,13 @@ async def process_telemetry(
             for row in history_rows
         ]
         device = dict(device_row) if device_row else {}
+        inventory_rows = connection.execute(
+            "SELECT device_id, name, device_type, status, neighbors_json FROM devices ORDER BY device_id"
+        ).fetchall()
+        device_inventory = [dict(row) for row in inventory_rows]
         window_rows = connection.execute(
             """SELECT t.device_id, t.timestamp, t.severity, t.metrics_json,
-                      d.device_type, d.latitude, d.longitude, d.location_known
+                      d.device_type
                FROM telemetry t LEFT JOIN devices d ON d.device_id=t.device_id
                WHERE t.timestamp >= ? AND t.report_json IS NOT NULL
                ORDER BY t.timestamp DESC LIMIT 1000""",
@@ -413,22 +390,18 @@ async def process_telemetry(
                 "severity": row["severity"],
                 "metrics": json.loads(row["metrics_json"]),
                 "device_type": row["device_type"] or "network device",
-                "latitude": row["latitude"] or 0,
-                "longitude": row["longitude"] or 0,
-                "location_known": bool(row["location_known"]),
             }
             for row in window_rows
         ]
     report = await run_in_threadpool(
         run_workflow,
-        event,
-        device,
-        history,
-        telemetry_window,
-        {},
-        redis_geo_lookup,
-        BLAST_RADIUS_KM,
-        LLM,
+        event=event,
+        device=device,
+        history=history,
+        telemetry_window=telemetry_window,
+        device_inventory=device_inventory,
+        connection_hops=CONNECTION_HOPS,
+        llm=LLM,
     )
     queue_status = "needs_human" if report["human_questions"] else "processed"
     with connect_db() as connection:
@@ -436,26 +409,31 @@ async def process_telemetry(
             "UPDATE telemetry SET queue_status=?, severity=?, report_json=? WHERE event_id=?",
             (queue_status, report["severity"], json.dumps(report), event["event_id"]),
         )
-        stale_cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         connection.execute(
-            """UPDATE devices SET risk_probability=0,
-               status=CASE WHEN last_seen >= ? THEN 'healthy' ELSE 'unknown' END""",
-            (stale_cutoff,),
-        )
-        connection.execute(
-            """INSERT OR IGNORE INTO devices(device_id, latitude, longitude, status, last_seen)
-               VALUES (?, 0, 0, ?, ?)""",
+            """INSERT OR IGNORE INTO devices(device_id, status, last_seen)
+               VALUES (?, ?, ?)""",
             (event["device_id"], report["severity"], event["timestamp"]),
         )
-        for issue in report["device_statuses"]:
+        processed_ids = set()
+        for issue in report.get("device_statuses", []):
+            device_id = issue.get("device_id")
+            if not device_id:
+                continue
+            processed_ids.add(device_id)
             connection.execute(
-                "UPDATE devices SET status=?, risk_probability=? WHERE device_id=?",
-                (issue["severity"], issue["probability"], issue["device_id"]),
+                "UPDATE devices SET status=?, risk_probability=?, last_seen=? WHERE device_id=?",
+                (issue["severity"], issue["probability"], event["timestamp"], device_id),
             )
-        connection.execute(
-            "UPDATE devices SET status=?, risk_probability=?, last_seen=? WHERE device_id=?",
-            (report["severity"], 0.96 if report["severity"] == "critical" else (0.78 if report["severity"] == "warning" else 0.05), event["timestamp"], event["device_id"]),
-        )
+        if event["device_id"] not in processed_ids:
+            connection.execute(
+                "UPDATE devices SET status=?, risk_probability=?, last_seen=? WHERE device_id=?",
+                (
+                    report["severity"],
+                    0.96 if report["severity"] == "critical" else (0.78 if report["severity"] == "warning" else 0.05),
+                    event["timestamp"],
+                    event["device_id"],
+                ),
+            )
     await hub.broadcast({"type": "incident_report", "incident": report})
     return {"status": queue_status, "event_id": event["event_id"]}
 
@@ -463,48 +441,77 @@ async def process_telemetry(
 def parse_inventory(data: bytes, filename: str) -> list[dict[str, Any]]:
     try:
         text = data.decode("utf-8-sig")
-        if filename.lower().endswith((".geojson", ".json")):
-            source = json.loads(text)
-            features = source.get("features", []) if source.get("type") == "FeatureCollection" else [source]
-            rows = []
-            for feature in features:
-                properties = feature.get("properties") or {}
-                geometry = feature.get("geometry") or {}
-                if geometry.get("type") != "Point" or len(geometry.get("coordinates", [])) < 2:
-                    continue
-                longitude, latitude = geometry["coordinates"][:2]
-                rows.append({**properties, "latitude": latitude, "longitude": longitude})
-        elif filename.lower().endswith(".csv"):
+        if filename.lower().endswith(".csv"):
             rows = list(csv.DictReader(io.StringIO(text)))
+        elif filename.lower().endswith(".json"):
+            source = json.loads(text)
+            rows = source if isinstance(source, list) else source.get("devices", [])
+            if not isinstance(rows, list):
+                raise HTTPException(status_code=400, detail="JSON inventory must be a list of devices or contain a devices list")
         else:
-            raise HTTPException(status_code=415, detail="Upload a CSV or GeoJSON file")
+            raise HTTPException(status_code=415, detail="Upload a CSV or JSON topology inventory")
     except (UnicodeDecodeError, json.JSONDecodeError, csv.Error) as error:
         raise HTTPException(status_code=400, detail=f"Invalid inventory file: {error}") from error
     devices = []
     for row in rows:
         device_id = str(row.get("device_id") or row.get("id") or "").strip()
-        try:
-            latitude = float(row["latitude"])
-            longitude = float(row["longitude"])
-        except (KeyError, TypeError, ValueError):
+        if not device_id:
             continue
-        if not device_id or not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
-            continue
+        raw_connections = (
+            row.get("connected_to")
+            or row.get("neighbors")
+            or row.get("connections")
+            or row.get("neighbors_json")
+            or []
+        )
+        if isinstance(raw_connections, str):
+            try:
+                parsed_connections = json.loads(raw_connections)
+            except json.JSONDecodeError:
+                parsed_connections = None
+            if isinstance(parsed_connections, list):
+                raw_connections = parsed_connections
+        if isinstance(raw_connections, str):
+            connections = [
+                item.strip()
+                for item in raw_connections.replace(",", ";").split(";")
+                if item.strip()
+            ]
+        elif isinstance(raw_connections, list):
+            connections = [str(item).strip() for item in raw_connections if str(item).strip()]
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Connections for {device_id} must be a list or semicolon-separated string.",
+            )
+        if device_id in connections:
+            raise HTTPException(status_code=422, detail=f"Device {device_id} cannot connect to itself.")
+        latitude = row.get("latitude")
+        longitude = row.get("longitude")
+        location_known = 0
+        if latitude is not None and longitude is not None:
+            try:
+                latitude = float(latitude)
+                longitude = float(longitude)
+                if -90 <= latitude <= 90 and -180 <= longitude <= 180:
+                    location_known = 1
+            except (TypeError, ValueError):
+                latitude = None
+                longitude = None
         devices.append({
             "device_id": device_id,
             "name": str(row.get("name") or device_id),
-            "latitude": latitude,
-            "longitude": longitude,
             "device_type": str(row.get("device_type") or "network device").lower(),
             "vendor": str(row.get("vendor") or ""),
-            "neighbors_json": json.dumps(
-                row.get("neighbors", [])
-                if isinstance(row.get("neighbors"), list)
-                else [item.strip() for item in str(row.get("neighbors") or "").split(";") if item.strip()]
-            ),
+            "latitude": latitude,
+            "longitude": longitude,
+            "location_known": location_known,
+            "neighbors_json": json.dumps(sorted(set(connections))),
         })
     if not devices:
-        raise HTTPException(status_code=422, detail="No valid devices found; each row needs a device_id and valid latitude/longitude")
+        raise HTTPException(status_code=422, detail="No valid devices found; each row needs a device_id.")
+    if len({device["device_id"] for device in devices}) != len(devices):
+        raise HTTPException(status_code=422, detail="Device IDs must be unique within an inventory upload.")
     return devices
 
 
@@ -515,23 +522,29 @@ async def upload_inventory(file: UploadFile = File(...)) -> dict[str, Any]:
         raise HTTPException(status_code=413, detail="Inventory upload must be 10 MB or smaller")
     devices = parse_inventory(data, file.filename or "")
     with connect_db() as connection:
+        existing_ids = {
+            row["device_id"] for row in connection.execute("SELECT device_id FROM devices")
+        }
+        uploaded_ids = {device["device_id"] for device in devices}
+        unknown = sorted({
+            neighbor
+            for device in devices
+            for neighbor in json.loads(device["neighbors_json"])
+            if neighbor not in existing_ids | uploaded_ids
+        })
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Connections reference unknown device IDs: {', '.join(unknown)}",
+            )
         connection.executemany(
-            """INSERT INTO devices(device_id, name, latitude, longitude, device_type, vendor, status,
-               neighbors_json, location_known)
-               VALUES (:device_id, :name, :latitude, :longitude, :device_type, :vendor, 'unknown', :neighbors_json, 1)
-               ON CONFLICT(device_id) DO UPDATE SET name=excluded.name, latitude=excluded.latitude,
-               longitude=excluded.longitude, device_type=excluded.device_type, vendor=excluded.vendor,
-               neighbors_json=excluded.neighbors_json, location_known=1""",
+            """INSERT INTO devices(device_id, name, device_type, vendor, status, latitude, longitude, location_known, neighbors_json)
+               VALUES (:device_id, :name, :device_type, :vendor, 'unknown', :latitude, :longitude, :location_known, :neighbors_json)
+               ON CONFLICT(device_id) DO UPDATE SET name=excluded.name, device_type=excluded.device_type,
+               vendor=excluded.vendor, latitude=excluded.latitude, longitude=excluded.longitude,
+               location_known=excluded.location_known, neighbors_json=excluded.neighbors_json""",
             devices,
         )
-    try:
-        await index_devices(devices)
-    except RedisError as error:
-        logger.exception("Unable to index uploaded inventory in Redis GEO")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Inventory was saved, but Redis geospatial indexing failed: {error}",
-        ) from error
     return {"uploaded": len(devices), "device_ids": [device["device_id"] for device in devices]}
 
 
@@ -541,22 +554,15 @@ async def load_iit_bhubaneswar_demo_inventory() -> dict[str, Any]:
     with connect_db() as connection:
         connection.execute("DELETE FROM devices")
         connection.executemany(
-            """INSERT INTO devices(device_id, name, latitude, longitude, device_type, vendor, status,
-               neighbors_json, location_known)
-               VALUES (:device_id, :name, :latitude, :longitude, :device_type, :vendor, 'unknown', :neighbors_json, 1)""",
+            """INSERT INTO devices(device_id, name, device_type, vendor, status, latitude, longitude, location_known, neighbors_json)
+               VALUES (:device_id, :name, :device_type, :vendor, 'unknown', :latitude, :longitude, :location_known, :neighbors_json)
+               ON CONFLICT(device_id) DO UPDATE SET name=excluded.name, device_type=excluded.device_type,
+               vendor=excluded.vendor, latitude=excluded.latitude, longitude=excluded.longitude,
+               location_known=excluded.location_known, neighbors_json=excluded.neighbors_json""",
             devices,
         )
-    try:
-        if redis_client is None:
-            raise RedisError("Redis connection is not initialized")
+    if redis_client is not None:
         await redis_client.delete(GEO_KEY, DEVICE_DETAILS_KEY)
-        await index_devices(devices)
-    except RedisError as error:
-        logger.exception("Unable to index IIT Bhubaneswar demo inventory in Redis GEO")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Demo inventory was saved, but Redis geospatial indexing failed: {error}",
-        ) from error
     return {
         "site": "IIT Bhubaneswar",
         "synthetic": True,
@@ -564,6 +570,31 @@ async def load_iit_bhubaneswar_demo_inventory() -> dict[str, Any]:
         "uploaded": len(devices),
         "device_ids": [device["device_id"] for device in devices],
     }
+
+
+@app.get("/simulation/presets")
+async def simulation_presets() -> dict[str, Any]:
+    return {"presets": EVENT_PRESETS}
+
+
+@app.post("/simulation/run")
+async def simulate_event(scenario: SimulationIn) -> dict[str, Any]:
+    """Run a deterministic what-if simulation without changing inventory or telemetry."""
+    with connect_db() as connection:
+        rows = connection.execute(
+            """SELECT device_id, name, device_type, status, neighbors_json
+               FROM devices ORDER BY device_id"""
+        ).fetchall()
+    devices = [dict(row) for row in rows]
+    if not devices:
+        raise HTTPException(
+            status_code=409,
+            detail="Load or upload a connected-device inventory before simulating an event.",
+        )
+    try:
+        return await run_in_threadpool(run_simulation, devices, scenario.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/overview")
@@ -651,7 +682,9 @@ async def review_incident(incident_id: str, review: ReviewIn) -> dict[str, Any]:
     return {"incident_id": incident_id, "decision": review.decision, "reviewed_at": now}
 
 
-def load_incident_context(event_id: str) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+def load_incident_context(
+    event_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     with connect_db() as connection:
         row = connection.execute(
             """SELECT event_id, device_id, timestamp, severity, metrics_json, queue_status
@@ -670,6 +703,10 @@ def load_incident_context(event_id: str) -> tuple[dict[str, Any], dict[str, Any]
         }
         device_row = connection.execute("SELECT * FROM devices WHERE device_id=?", (row["device_id"],)).fetchone()
         device = dict(device_row) if device_row else {}
+        inventory_rows = connection.execute(
+            "SELECT device_id, name, device_type, status, neighbors_json FROM devices ORDER BY device_id"
+        ).fetchall()
+        device_inventory = [dict(item) for item in inventory_rows]
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         historical_rows = connection.execute(
             """SELECT timestamp, metrics_json FROM telemetry WHERE device_id=?
@@ -683,7 +720,7 @@ def load_incident_context(event_id: str) -> tuple[dict[str, Any], dict[str, Any]
         ]
         window_rows = connection.execute(
             """SELECT t.device_id, t.timestamp, t.severity, t.metrics_json,
-                      d.device_type, d.latitude, d.longitude, d.location_known
+                      d.device_type
                FROM telemetry t LEFT JOIN devices d ON d.device_id=t.device_id
                WHERE t.timestamp >= ? AND t.event_id != ? AND t.report_json IS NOT NULL
                ORDER BY t.timestamp DESC LIMIT 1000""",
@@ -696,13 +733,10 @@ def load_incident_context(event_id: str) -> tuple[dict[str, Any], dict[str, Any]
                 "severity": item["severity"],
                 "metrics": json.loads(item["metrics_json"]),
                 "device_type": item["device_type"] or "network device",
-                "latitude": item["latitude"] or 0,
-                "longitude": item["longitude"] or 0,
-                "location_known": bool(item["location_known"]),
             }
             for item in window_rows
         ]
-    return event, device, history, telemetry_window
+    return event, device, history, telemetry_window, device_inventory
 
 
 @app.post("/incidents/{incident_id}/information")
@@ -720,7 +754,7 @@ async def provide_incident_information(
     if incident_row["queue_status"] != "needs_human":
         raise HTTPException(status_code=409, detail="This incident is not awaiting client information")
     previous_report = json.loads(incident_row["report_json"])
-    event, device, history, telemetry_window = load_incident_context(incident_id)
+    event, device, history, telemetry_window, device_inventory = load_incident_context(incident_id)
     answers = {
         **previous_report.get("human_answers", {}),
         **information.answers,
@@ -730,16 +764,36 @@ async def provide_incident_information(
         event["units"]["firewall_drops"] = "events"
     if answers.get("firewall_alerts") is True or answers.get("utm_alerts") is True:
         answers["utm_alerts"] = True
+    event_context = (
+        information.event_context.model_dump(exclude_none=True)
+        if information.event_context is not None
+        else previous_report.get("event_context")
+    )
+    event_simulation = None
+    if event_context and event_context.get("event_happening"):
+        scenario = {
+            key: value
+            for key, value in event_context.items()
+            if key != "event_happening"
+        }
+        try:
+            event_simulation = await run_in_threadpool(
+                run_simulation, device_inventory, scenario
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
     report = await run_in_threadpool(
         run_workflow,
-        event,
-        device,
-        history,
-        telemetry_window,
-        answers,
-        redis_geo_lookup,
-        BLAST_RADIUS_KM,
-        LLM,
+        event=event,
+        device=device,
+        history=history,
+        telemetry_window=telemetry_window,
+        human_answers=answers,
+        device_inventory=device_inventory,
+        connection_hops=CONNECTION_HOPS,
+        llm=LLM,
+        event_context=event_context,
+        event_simulation=event_simulation,
     )
     queue_status = "needs_human" if report["human_questions"] else "processed"
     with connect_db() as connection:
@@ -747,25 +801,26 @@ async def provide_incident_information(
             "UPDATE telemetry SET queue_status=?, report_json=? WHERE event_id=?",
             (queue_status, json.dumps(report), incident_id),
         )
-        stale_cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-        connection.execute(
-            """UPDATE devices SET risk_probability=0,
-               status=CASE WHEN last_seen >= ? THEN 'healthy' ELSE 'unknown' END""",
-            (stale_cutoff,),
-        )
-        for issue in report["device_statuses"]:
+        processed_ids = set()
+        for issue in report.get("device_statuses", []):
+            device_id = issue.get("device_id")
+            if not device_id:
+                continue
+            processed_ids.add(device_id)
             connection.execute(
-                "UPDATE devices SET status=?, risk_probability=? WHERE device_id=?",
-                (issue["severity"], issue["probability"], issue["device_id"]),
+                "UPDATE devices SET status=?, risk_probability=?, last_seen=? WHERE device_id=?",
+                (issue["severity"], issue["probability"], event["timestamp"], device_id),
             )
-        connection.execute(
-            "UPDATE devices SET status=?, risk_probability=? WHERE device_id=?",
-            (
-                report["severity"],
-                0.96 if report["severity"] == "critical" else (0.78 if report["severity"] == "warning" else 0.05),
-                event["device_id"],
-            ),
-        )
+        if event["device_id"] not in processed_ids:
+            connection.execute(
+                "UPDATE devices SET status=?, risk_probability=?, last_seen=? WHERE device_id=?",
+                (
+                    report["severity"],
+                    0.96 if report["severity"] == "critical" else (0.78 if report["severity"] == "warning" else 0.05),
+                    event["timestamp"],
+                    event["device_id"],
+                ),
+            )
     await hub.broadcast({"type": "incident_report", "incident": report})
     return {"incident_id": incident_id, "status": queue_status, "report": report}
 
@@ -828,11 +883,22 @@ async def download_incident_report(incident_id: str) -> Response:
         )
     lines.extend(["", "## Device issue map input", ""])
     for device in report["issue_devices"]:
+        hops = device.get("connection_hops")
         lines.append(
             f"- `{device['device_id']}` ({device['device_type']}) — "
-            f"{device['probability']:.0%} risk, {device['severity']}, "
-            f"{device['latitude']}, {device['longitude']}"
+            f"{device['probability']:.0%} risk, {device['severity']}"
+            + (f", {hops} topology hop(s)" if hops is not None else "")
         )
+    if report.get("event_simulation"):
+        lines.extend(["", "## Event simulation"])
+        simulation_summary = report["event_simulation"]["summary"]
+        lines.append(
+            f"Predicted {simulation_summary['critical']} critical and "
+            f"{simulation_summary['warning']} warning device(s) around "
+            f"{report['event_context']['anchor_device_id']}."
+        )
+        for recommendation in report["event_simulation"]["recommendations"]:
+            lines.append(f"- **{recommendation['title']}:** {recommendation['action']}")
     lines.extend(["", "## Human-in-the-loop", ""])
     lines.extend(f"- {question}" for question in report["human_questions"])
     lines.extend(["", "## Limitations", "", report["limitations"], ""])

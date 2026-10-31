@@ -5,5 +5,5 @@ from backend.common.classes.device import DeviceRisk
 
 
 class ConnectivityAgentOutput(StrictModel):
-    radius_km: float = Field(gt=0)
-    blast_radius: list[DeviceRisk]
+    hop_limit: int = Field(ge=1, le=3)
+    nearby_connections: list[DeviceRisk]

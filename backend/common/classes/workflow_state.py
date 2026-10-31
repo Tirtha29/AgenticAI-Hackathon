@@ -1,5 +1,4 @@
 import operator
-from collections.abc import Callable
 from typing import Annotated, Any, TypedDict
 
 
@@ -9,8 +8,10 @@ class WorkflowState(TypedDict, total=False):
     history: list[dict[str, Any]]
     telemetry_window: list[dict[str, Any]]
     human_answers: dict[str, bool | str | float]
-    geo_lookup: Callable[[float, float, float], list[dict[str, Any]]]
-    radius_km: float
+    device_inventory: list[dict[str, Any]]
+    connection_hops: int
+    event_context: dict[str, Any] | None
+    event_simulation: dict[str, Any] | None
     performance: dict[str, Any]
     infrastructure: dict[str, Any]
     health: dict[str, Any]

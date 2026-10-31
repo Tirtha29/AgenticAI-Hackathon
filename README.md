@@ -56,6 +56,20 @@ Open the dashboard at <http://localhost:8501>, API docs at <http://localhost:800
 
 The dashboard includes an overview with device health counts, live status and hot-zone maps, recent telemetry charts, incident investigation/HITL, a searchable rule knowledge base, device inventory, analytics, settings, and agent execution health/latency. The sidebar can load 15 synthetic IIT Bhubaneswar campus-area devices; this replaces the current inventory, and the sample coordinates are illustrative rather than surveyed placements. The knowledge explorer is also available through `GET /knowledge/rules?q=latency&limit=20`.
 
+### Event-impact simulation
+
+The **Event Simulation** page models festival, sports, livestream, exam, and outage scenarios using the located device inventory. It estimates event demand, device overload, roaming spill-over, shared-uplink effects, timelines, and optional capacity/traffic-shaping mitigations. The animation and ranked recommendations are what-if results only: they do not write to device health or telemetry, and their capacity/traffic assumptions are not calibrated forecasts.
+
+The API exposes `GET /simulation/presets` and `POST /simulation/run`. Omitted scenario settings use preset defaults. For example:
+
+```bash
+curl -X POST http://localhost:8000/simulation/run \
+  -H 'Content-Type: application/json' \
+  -d '{"event_type":"festival","latitude":20.1520,"longitude":85.6748,"attendance":6000}'
+```
+
+Upload or load a located inventory before calling the run endpoint; otherwise it returns HTTP 409. Scenario inputs are validated, and simulations support at most 1,500 located devices.
+
 ### Docker Compose alternative
 
 Docker Desktop must be running:

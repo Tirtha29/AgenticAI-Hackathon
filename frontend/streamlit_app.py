@@ -12,16 +12,22 @@ from urllib.parse import quote
 
 import altair as alt
 import pandas as pd
-import pydeck as pdk
 import requests
 import streamlit as st
+from frontend.event_simulation import render_simulation
 from dotenv import load_dotenv
+
+try:
+    import pydeck as pdk
+except ImportError:  # pragma: no cover - fallback when pydeck is absent
+    pdk = None
 
 load_dotenv()
 API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
 PAGES = (
     "Overview",
     "Live Network Map",
+    "Event Simulation",
     "Device Inventory",
     "Agent Control Center",
     "Incident Investigation",
@@ -40,7 +46,8 @@ LOCAL_TZ = datetime.now().astimezone().tzinfo
 
 PAGE_HEADERS: dict[str, tuple[str, str, str]] = {
     "Overview": ("👋", "Welcome to NetCoop AI", "Real-time network monitoring, intelligent diagnosis and proactive recommendations"),
-    "Live Network Map": ("🗺️", "IIT Bhubaneswar · Live Network Map", "Live device positions and status across the campus network"),
+    "Live Network Map": ("🔗", "Live Network Map", "Campus geospatial view of the IIT Bhubaneswar device inventory and current health"),
+    "Event Simulation": ("🎪", "Event Impact Simulation", "Explore event-related congestion, spill-over and mitigation scenarios without changing live network state."),
     "Device Inventory": ("📍", "Device Inventory", "Upload a CSV or GeoJSON inventory from the sidebar, then review locations and current status."),
     "Agent Control Center": ("🤖", "Agent Control Center", "Live status and most recent execution latency for every LangGraph workflow agent."),
     "Incident Investigation": ("🚨", "Incident Investigation", "Inspect the evidence, review ranked probable causes, and answer agent follow-up questions."),
@@ -367,84 +374,81 @@ def show_topbar(page: str, health: dict[str, Any]) -> None:
     )
 
 
-def make_map(devices: list[dict[str, Any]], *, heat: bool = False, height: int = 360) -> None:
-    mapped = [
-        device for device in devices
-        if device.get("location_known") and device.get("latitude") is not None and device.get("longitude") is not None
-    ]
-    if not mapped:
-        st.info("Upload a device inventory with coordinates to render the network map.")
+def device_neighbors(device: dict[str, Any]) -> list[str]:
+    raw = device.get("neighbors_json") or device.get("neighbors") or []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = [item.strip() for item in raw.replace(",", ";").split(";") if item.strip()]
+    return [str(item) for item in raw] if isinstance(raw, list) else []
+
+
+def render_topology(
+    devices: list[dict[str, Any]],
+    *,
+    height: int = 360,
+    highlight_ids: set[str] | None = None,
+) -> None:
+    """Render the campus geospatial map using device latitude/longitude metadata."""
+    if not devices:
+        st.info("Upload a connected-device inventory to render the campus map.")
         return
-    frame = pd.DataFrame(mapped)
-    colors = {
-        "healthy": [39, 190, 127, 235],
-        "warning": [255, 192, 44, 245],
-        "critical": [239, 76, 80, 250],
-        "unknown": [132, 143, 166, 210],
+
+    points: list[dict[str, Any]] = []
+    highlights = highlight_ids or set()
+    for device in devices:
+        latitude = device.get("latitude")
+        longitude = device.get("longitude")
+        if latitude is None or longitude is None:
+            continue
+        status = str(device.get("status", "unknown")).lower()
+        points.append({
+            "device_id": str(device.get("device_id") or "unknown"),
+            "name": device.get("name") or device.get("device_id") or "Unknown device",
+            "device_type": str(device.get("device_type") or "network device"),
+            "status": status,
+            "latitude": float(latitude),
+            "longitude": float(longitude),
+            "risk_probability": float(device.get("risk_probability", 0.0) or 0.0),
+            "highlight": str(device.get("device_id") or "") in highlights,
+        })
+
+    if not points:
+        st.info("No latitude/longitude data is present in the current device inventory.")
+        return
+
+    df = pd.DataFrame(points)
+    color_map = {
+        "healthy": [34, 197, 94, 200],
+        "warning": [250, 204, 21, 205],
+        "critical": [239, 68, 68, 220],
+        "unknown": [148, 163, 184, 170],
     }
-    frame["color"] = frame["status"].map(colors).apply(
-        lambda value: value if isinstance(value, list) else colors["unknown"]
+    df["color"] = df["status"].map(color_map).apply(lambda value: value if isinstance(value, list) else [148, 163, 184, 170])
+    df["radius"] = df["highlight"].map({True: 24, False: 16}).astype(float)
+
+    st.map(
+        data=df[["latitude", "longitude"]],
+        latitude=df["latitude"].mean(),
+        longitude=df["longitude"].mean(),
+        zoom=15,
+        use_container_width=True,
     )
-    layers: list[Any] = []
-    if heat:
-        frame["risk_weight"] = frame.get("risk_probability", pd.Series([0.0] * len(frame))).fillna(0.0)
-    if heat and frame["risk_weight"].max() > 0:
-        layers.append(pdk.Layer(
-            "HeatmapLayer",
-            data=frame,
-            get_position="[longitude, latitude]",
-            get_weight="risk_weight",
-            radiusPixels=55,
-            intensity=1.2,
-            threshold=0.05,
-            opacity=0.7,
-            color_range=[
-                [255, 245, 170, 25], [254, 217, 118, 90], [254, 178, 76, 140],
-                [253, 141, 60, 180], [240, 59, 32, 215], [189, 0, 38, 255],
-            ],
-        ))
-    layers.append(pdk.Layer(
-        "ScatterplotLayer",
-        data=frame,
-        get_position="[longitude, latitude]",
-        get_fill_color="color",
-        get_line_color=[255, 255, 255, 235],
-        get_radius=95 if not heat else 70,
-        radius_min_pixels=7,
-        radius_max_pixels=18,
-        line_width_min_pixels=2,
-        pickable=True,
-        auto_highlight=True,
-    ))
-    view = pdk.ViewState(
-        latitude=float(frame["latitude"].mean()),
-        longitude=float(frame["longitude"].mean()),
-        zoom=12 if len(frame) < 30 else 10,
-        pitch=0,
-    )
-    tooltip = {
-        "html": (
-            "<div style='font-weight:700;margin-bottom:4px'>{name} <span style='opacity:.55;font-weight:500'>· {device_id}</span></div>"
-            "<div>Type: {device_type}</div><div>Status: <b>{status}</b></div><div>Risk: {risk_probability}</div>"
-        ),
-        "style": {
-            "backgroundColor": "white", "color": "#17213d", "fontSize": "12px", "padding": "10px 12px",
-            "borderRadius": "12px", "boxShadow": "0 8px 24px rgba(40,50,90,.18)",
-        },
-    }
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=layers,
-            initial_view_state=view,
-            tooltip=tooltip,
-            map_style="https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
-        ),
-        height=height,
+
+    md(status_legend())
+    st.dataframe(
+        df[["device_id", "name", "device_type", "status", "latitude", "longitude", "risk_probability"]].sort_values("device_id").reset_index(drop=True),
+        hide_index=True,
         use_container_width=True,
     )
 
 
-def incident_rows(incidents: list[dict[str, Any]], limit: int = 5) -> None:
+def incident_rows(
+    incidents: list[dict[str, Any]],
+    limit: int = 5,
+    devices: list[dict[str, Any]] | None = None,
+) -> None:
     if not incidents:
         st.info("No processed incidents yet. Send telemetry to begin.")
         return
@@ -477,10 +481,10 @@ def incident_rows(incidents: list[dict[str, Any]], limit: int = 5) -> None:
             """
         )
         with st.expander(f"Investigate {incident.get('incident_id', '')[:8]}"):
-            show_incident(incident)
+            show_incident(incident, devices or [])
 
 
-def show_incident(incident: dict[str, Any]) -> None:
+def show_incident(incident: dict[str, Any], devices: list[dict[str, Any]]) -> None:
     st.write(incident.get("summary", ""))
     scoring_method = incident.get("scoring_method", "static_fallback").replace("_", " ").title()
     st.caption(
@@ -529,10 +533,81 @@ def show_incident(incident: dict[str, Any]) -> None:
         st.caption(f"Web research: {research['message']}")
     questions = incident.get("human_questions", [])
     if questions:
-        st.warning("Additional client information is needed before confirming a cause.")
+        st.warning("Operator follow-up is pending.")
         for question in questions:
             st.markdown(f"- {question}")
         with st.form(f"information-{incident['incident_id']}"):
+            event_context: dict[str, Any] | None = None
+            if incident.get("event_context") is None:
+                event_answer = st.radio(
+                    "Is a crowd-gathering event happening?",
+                    ["No", "Yes"],
+                    horizontal=True,
+                    key=f"event-happening-{incident['incident_id']}",
+                )
+                event_context = {"event_happening": event_answer == "Yes"}
+                if event_answer == "Yes":
+                    st.caption(
+                        "Enter the event coordinates and select the network device serving that area. "
+                        "Coordinates are recorded for context; impact is propagated through topology links."
+                    )
+                    label_to_id = {
+                        f"{device['device_id']} · {device.get('name') or device['device_id']}": device["device_id"]
+                        for device in devices
+                    }
+                    if not label_to_id:
+                        st.error("Load or upload the device topology before simulating an event.")
+                        label_to_id = {incident["device_id"]: incident["device_id"]}
+                    event_type = st.selectbox(
+                        "Event type",
+                        ["festival", "sports", "livestream", "exam", "outage"],
+                        key=f"event-type-{incident['incident_id']}",
+                    )
+                    anchor_label = st.selectbox(
+                        "Serving / anchor device",
+                        list(label_to_id),
+                        key=f"event-anchor-{incident['incident_id']}",
+                    )
+                    latitude_col, longitude_col = st.columns(2)
+                    latitude = latitude_col.number_input(
+                        "Event latitude",
+                        min_value=-90.0,
+                        max_value=90.0,
+                        value=0.0,
+                        format="%.6f",
+                        key=f"event-lat-{incident['incident_id']}",
+                    )
+                    longitude = longitude_col.number_input(
+                        "Event longitude",
+                        min_value=-180.0,
+                        max_value=180.0,
+                        value=0.0,
+                        format="%.6f",
+                        key=f"event-lon-{incident['incident_id']}",
+                    )
+                    attendance = st.number_input(
+                        "Expected attendance",
+                        min_value=1,
+                        max_value=500_000,
+                        value=5000,
+                        step=100,
+                        key=f"event-attendance-{incident['incident_id']}",
+                    )
+                    radius_hops = st.slider(
+                        "Topology impact radius (hops)",
+                        1,
+                        3,
+                        2,
+                        key=f"event-hops-{incident['incident_id']}",
+                    )
+                    event_context.update({
+                        "event_type": event_type,
+                        "anchor_device_id": label_to_id[anchor_label],
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "attendance": attendance,
+                        "radius_hops": radius_hops,
+                    })
             firewall_alert = st.selectbox("Firewall or UTM alert?", ["Not sure", "No", "Yes"], key=f"utm-{incident['incident_id']}")
             firewall_change = st.selectbox("Recent firewall policy change?", ["Not sure", "No", "Yes"], key=f"fw-{incident['incident_id']}")
             interface_errors = st.selectbox("Are interface/CRC errors increasing?", ["Not sure", "No", "Yes"], key=f"crc-{incident['incident_id']}")
@@ -550,19 +625,77 @@ def show_incident(incident: dict[str, Any]) -> None:
                 if include_drops:
                     answers["firewall_drops"] = drops
                 try:
-                    api_post(f"/incidents/{incident['incident_id']}/information", json={"answers": answers})
-                    st.success("Client information submitted; diagnosis has been updated.")
+                    api_post(
+                        f"/incidents/{incident['incident_id']}/information",
+                        json={"answers": answers, "event_context": event_context},
+                    )
+                    st.success("Operator information submitted; report and event estimate were updated.")
                     st.rerun()
                 except requests.RequestException as error:
                     st.error(f"Could not submit client information: {error}")
+    nearby = incident.get("nearby_connections", [])
+    if nearby:
+        st.subheader("Topology-nearby watch list")
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Device": item["device_id"],
+                    "Type": item["device_type"],
+                    "Severity": item["severity"],
+                    "Risk estimate": item["probability"],
+                    "Hops": item["connection_hops"],
+                    "Evidence": "; ".join(item["evidence"]),
+                }
+                for item in nearby
+            ]),
+            hide_index=True,
+            use_container_width=True,
+        )
+    simulation = incident.get("event_simulation")
+    if simulation:
+        st.subheader("Event simulation (what-if estimate)")
+        summary = simulation["summary"]
+        metrics = st.columns(4)
+        metrics[0].metric("Critical devices", summary["critical"])
+        metrics[1].metric("Warning devices", summary["warning"])
+        metrics[2].metric("Peak network load", f"{summary['peak_network_load_pct']:.1f}%")
+        metrics[3].metric("First overload", f"T+{summary['first_critical_minute']} min" if summary["first_critical_minute"] is not None else "None")
+        predicted = [
+            item for item in simulation["devices"]
+            if item["severity"] in {"critical", "warning"}
+        ]
+        if predicted:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Device": item["device_id"],
+                        "Area": item["area"],
+                        "Role": item["role"],
+                        "Severity": item["severity"],
+                        "Peak utilization": item["peak_utilization"],
+                        "Risk estimate": item["risk_probability"],
+                        "Topology hops": item["connection_hops"],
+                        "Recommendation": item["recommended_action"],
+                    }
+                    for item in predicted
+                ]),
+                hide_index=True,
+                use_container_width=True,
+            )
+        st.caption(simulation["model_note"])
+
     st.json({
         "telemetry": incident.get("telemetry", {}),
         "units": incident.get("units", {}),
         "infrastructure_findings": incident.get("infrastructure_findings", []),
-        "nearby_devices": incident.get("blast_radius", []),
+        "nearby_connections": incident.get("nearby_connections", []),
+        "event_context": incident.get("event_context"),
         "historical_context": incident.get("historical_context", []),
         "limitations": incident.get("limitations", ""),
     })
+    if simulation:
+        with st.expander("Full event simulation data"):
+            st.json(simulation)
     st.link_button("Download incident report", f"{API_URL}/incidents/{incident['incident_id']}/report")
 
 
@@ -657,7 +790,7 @@ def render_sidebar() -> tuple[str, str | None]:
                     st.rerun()
                 except requests.RequestException as error:
                     st.error(f"Could not load demo devices: {error}")
-            inventory = st.file_uploader("Upload CSV or GeoJSON", type=["csv", "json", "geojson"], key="inventory-upload")
+            inventory = st.file_uploader("Upload connected-device CSV or JSON", type=["csv", "json"], key="inventory-upload")
             if inventory and st.button("Ingest device map", type="primary"):
                 try:
                     result = api_post("/devices/upload", files={"file": (inventory.name, inventory.getvalue())})
@@ -665,7 +798,7 @@ def render_sidebar() -> tuple[str, str | None]:
                     st.rerun()
                 except requests.RequestException as error:
                     st.error(f"Inventory upload failed: {error}")
-            st.caption("CSV: device_id, latitude, longitude; optional name, device_type, vendor, neighbors.")
+            st.caption("CSV: device_id, name, device_type, vendor, connected_to. Separate multiple device IDs with semicolons.")
 
         with st.expander("Client telemetry"):
             telemetry_file = st.file_uploader("Upload telemetry JSON", type=["json"], key="telemetry-upload")
@@ -817,9 +950,8 @@ def render_overview(data: dict[str, Any], health: dict[str, Any]) -> None:
 
     left, mid, right = st.columns([1.65, 1.1, 0.85])
     with left, st.container(border=True):
-        md(card_header(icon("pin", 16, "currentColor", 2.2), "#ef5c62", "Network Map", status_legend()))
-        make_map(devices, height=440)
-        st.caption("Synthetic device coordinates are illustrative campus-area positions, not surveyed device placements.")
+        md(card_header(icon("pin", 16, "currentColor", 2.2), "#ef5c62", "Campus Device Map", status_legend()))
+        render_topology(devices, height=440)
 
     with mid:
         with st.container(border=True):
@@ -885,7 +1017,7 @@ def render_overview(data: dict[str, Any], health: dict[str, Any]) -> None:
             md(card_header(icon("alert", 16, "currentColor", 2.2), "#ef5c62", "Recent Incidents"))
         with link:
             st.button("View All →", key="viewall_incidents", on_click=go_to, args=("Incident Investigation",))
-        incident_rows(incidents, 3)
+        incident_rows(incidents, 3, devices)
 
     with middle, st.container(border=True):
         head, link = st.columns([2, 1])
@@ -893,14 +1025,18 @@ def render_overview(data: dict[str, Any], health: dict[str, Any]) -> None:
             md(card_header("🔥", "#f97316", "Top Hot Zones"))
         with link:
             st.button("View All →", key="viewall_hotzones", on_click=go_to, args=("Live Network Map",))
-        make_map(devices, heat=True, height=225)
-        md('<div class="heat-scale"><span>Low</span><i></i><span>High</span></div>')
         risks = sorted(devices, key=lambda item: item.get("risk_probability", 0), reverse=True)
         hot = [item for item in risks if item.get("risk_probability", 0) >= 0.45]
         if hot:
+            render_topology(
+                devices,
+                height=225,
+                highlight_ids={item["device_id"] for item in hot},
+            )
             st.caption(" · ".join(f"{item['device_id']} · {item['risk_probability']:.0%}" for item in hot[:4]))
         else:
-            st.caption("Awaiting telemetry before marking hot zones. The sample device locations are illustrative.")
+            render_topology(devices, height=225)
+            st.caption("Awaiting telemetry before highlighting affected devices.")
 
     with right, st.container(border=True):
         md(card_header(icon("book-open", 16, "currentColor", 2.2), "#4f83ff", "Knowledge Base Explorer"))
@@ -946,12 +1082,23 @@ def render_inventory(data: dict[str, Any]) -> None:
         st.info("No devices are registered yet.")
         return
     frame = pd.DataFrame(devices)
-    columns = [name for name in ("device_id", "name", "device_type", "vendor", "status", "risk_probability", "latitude", "longitude", "last_seen") if name in frame]
+    frame["connected_to"] = frame.apply(
+        lambda device: ";".join(device_neighbors(device.to_dict())),
+        axis=1,
+    )
+    columns = [
+        name
+        for name in (
+            "device_id", "name", "device_type", "vendor", "status",
+            "risk_probability", "connected_to", "last_seen",
+        )
+        if name in frame
+    ]
     with st.container(border=True):
         st.dataframe(frame[columns], hide_index=True, use_container_width=True)
         st.download_button("Download inventory CSV", frame[columns].to_csv(index=False), "device-inventory.csv", "text/csv")
     with st.container(border=True):
-        make_map(devices, height=540)
+        render_topology(devices, height=540)
 
 
 def render_incidents(data: dict[str, Any]) -> None:
@@ -963,7 +1110,7 @@ def render_incidents(data: dict[str, Any]) -> None:
     selected = st.selectbox("Choose an incident", list(options))
     incident = options[selected]
     with st.container(border=True):
-        show_incident(incident)
+        show_incident(incident, data.get("devices", []))
 
 
 def render_knowledge_base() -> None:
@@ -1059,10 +1206,9 @@ def main() -> None:
     elif page == "Live Network Map":
         devices = data.get("devices", [])
         with st.container(border=True):
-            make_map(devices, height=650)
-            st.caption("Demo coordinates are illustrative campus-area positions, not surveyed device placements. Nearby-device risk is a distance heuristic, not confirmation that a neighboring device has failed.")
-        with st.container(border=True):
-            st.dataframe(pd.DataFrame(devices), hide_index=True, use_container_width=True)
+            render_topology(devices, height=650)
+    elif page == "Event Simulation":
+        render_simulation(data.get("devices", []))
     elif page == "Device Inventory":
         render_inventory(data)
     elif page == "Agent Control Center":

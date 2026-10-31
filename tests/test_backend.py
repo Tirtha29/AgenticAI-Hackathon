@@ -234,48 +234,40 @@ class TelemetryTests(unittest.TestCase):
         ))
         report = run_workflow(
             event,
-            {
-                "device_type": "router",
-                "latitude": 47.6,
-                "longitude": -122.3,
-                "location_known": True,
-            },
+            {"device_id": "RTR1", "device_type": "router"},
             [{"metrics": {"latency_ms": 20}}],
-            geo_lookup=lambda *_: [{
-                "device_id": "SW2",
-                "device_type": "switch",
-                "latitude": 47.61,
-                "longitude": -122.31,
-                "distance_km": 0.9,
-            }],
+            device_inventory=[
+                {"device_id": "RTR1", "device_type": "router", "neighbors_json": '["SW2"]'},
+                {"device_id": "SW2", "device_type": "switch", "neighbors_json": "[]"},
+            ],
         )
         self.assertEqual(report["historical_context"][0]["two_hour_average"], 20)
-        self.assertEqual(report["blast_radius"][0]["device_id"], "SW2")
-        self.assertGreater(report["blast_radius"][0]["probability"], 0.45)
+        self.assertEqual(report["nearby_connections"][0]["device_id"], "SW2")
+        self.assertGreater(report["nearby_connections"][0]["probability"], 0.45)
+        self.assertEqual(report["nearby_connections"][0]["connection_hops"], 1)
 
     def test_catalog_contains_more_than_one_thousand_context_facts(self):
         self.assertEqual(len(FACT_CATALOG), 2640)
 
     def test_csv_inventory_parsing(self):
         devices = parse_inventory(
-            b"device_id,latitude,longitude,device_type\nSW1,47.6,-122.3,switch\n",
+            b"device_id,name,device_type,connected_to\nSW1,Core Switch,switch,RTR1;FW1\n",
             "devices.csv",
         )
         self.assertEqual(devices[0]["device_id"], "SW1")
         self.assertEqual(devices[0]["device_type"], "switch")
+        self.assertEqual(json.loads(devices[0]["neighbors_json"]), ["FW1", "RTR1"])
 
-    def test_geojson_inventory_parsing(self):
-        inventory = {
-            "type": "FeatureCollection",
-            "features": [{
-                "type": "Feature",
-                "properties": {"device_id": "R1", "device_type": "router"},
-                "geometry": {"type": "Point", "coordinates": [-122.3, 47.6]},
-            }],
-        }
-        devices = parse_inventory(json.dumps(inventory).encode(), "devices.geojson")
-        self.assertEqual(devices[0]["latitude"], 47.6)
-        self.assertEqual(devices[0]["longitude"], -122.3)
+    def test_json_inventory_parsing_uses_topology_without_device_coordinates(self):
+        inventory = [{
+            "device_id": "R1",
+            "device_type": "router",
+            "connected_to": ["SW1"],
+        }]
+        devices = parse_inventory(json.dumps(inventory).encode(), "devices.json")
+        self.assertEqual(devices[0]["device_id"], "R1")
+        self.assertEqual(json.loads(devices[0]["neighbors_json"]), ["SW1"])
+        self.assertNotIn("latitude", devices[0])
 
 
 if __name__ == "__main__":

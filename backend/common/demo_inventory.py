@@ -1,0 +1,151 @@
+import json
+from typing import Any
+
+
+IIT_BHUBANESWAR_DEMO_DEVICES: list[dict[str, Any]] = [
+    {
+        "device_id": "IITBBS-RTR-01",
+        "name": "Synthetic · Campus Core Router",
+        "latitude": 20.15130,
+        "longitude": 85.67610,
+        "device_type": "router",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-SW-01", "IITBBS-SW-02"],
+    },
+    {
+        "device_id": "IITBBS-RTR-02",
+        "name": "Synthetic · Campus Edge Router",
+        "latitude": 20.15420,
+        "longitude": 85.67930,
+        "device_type": "router",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-FW-01", "IITBBS-SW-03"],
+    },
+    {
+        "device_id": "IITBBS-SW-01",
+        "name": "Synthetic · Academic Block Switch",
+        "latitude": 20.15080,
+        "longitude": 85.67530,
+        "device_type": "switch",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-RTR-01"],
+    },
+    {
+        "device_id": "IITBBS-SW-02",
+        "name": "Synthetic · Library Switch",
+        "latitude": 20.15200,
+        "longitude": 85.67480,
+        "device_type": "switch",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-RTR-01"],
+    },
+    {
+        "device_id": "IITBBS-SW-03",
+        "name": "Synthetic · Laboratory Switch",
+        "latitude": 20.15350,
+        "longitude": 85.67700,
+        "device_type": "switch",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-RTR-02"],
+    },
+    {
+        "device_id": "IITBBS-SW-04",
+        "name": "Synthetic · Student Centre Switch",
+        "latitude": 20.14960,
+        "longitude": 85.67810,
+        "device_type": "switch",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-RTR-01"],
+    },
+    {
+        "device_id": "IITBBS-SW-05",
+        "name": "Synthetic · Hostel North Switch",
+        "latitude": 20.15580,
+        "longitude": 85.67650,
+        "device_type": "switch",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-RTR-02"],
+    },
+    {
+        "device_id": "IITBBS-SW-06",
+        "name": "Synthetic · Hostel South Switch",
+        "latitude": 20.14840,
+        "longitude": 85.67490,
+        "device_type": "switch",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-RTR-01"],
+    },
+    {
+        "device_id": "IITBBS-AP-01",
+        "name": "Synthetic · Academic Wi-Fi Access Point",
+        "latitude": 20.15020,
+        "longitude": 85.67430,
+        "device_type": "access point",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-SW-01"],
+    },
+    {
+        "device_id": "IITBBS-AP-02",
+        "name": "Synthetic · Library Wi-Fi Access Point",
+        "latitude": 20.15240,
+        "longitude": 85.67550,
+        "device_type": "access point",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-SW-02"],
+    },
+    {
+        "device_id": "IITBBS-AP-03",
+        "name": "Synthetic · Hostel North Wi-Fi Access Point",
+        "latitude": 20.15640,
+        "longitude": 85.67810,
+        "device_type": "access point",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-SW-05"],
+    },
+    {
+        "device_id": "IITBBS-AP-04",
+        "name": "Synthetic · Hostel South Wi-Fi Access Point",
+        "latitude": 20.14780,
+        "longitude": 85.67620,
+        "device_type": "access point",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-SW-06"],
+    },
+    {
+        "device_id": "IITBBS-FW-01",
+        "name": "Synthetic · Campus Firewall",
+        "latitude": 20.15480,
+        "longitude": 85.68010,
+        "device_type": "firewall",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-RTR-02"],
+    },
+    {
+        "device_id": "IITBBS-GW-01",
+        "name": "Synthetic · Internet Gateway",
+        "latitude": 20.15510,
+        "longitude": 85.68120,
+        "device_type": "gateway",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-RTR-02"],
+    },
+    {
+        "device_id": "IITBBS-SW-07",
+        "name": "Synthetic · Research Block Switch",
+        "latitude": 20.15290,
+        "longitude": 85.68020,
+        "device_type": "switch",
+        "vendor": "Demo",
+        "neighbors": ["IITBBS-RTR-02"],
+    },
+]
+
+
+def build_iit_bhubaneswar_inventory() -> list[dict[str, Any]]:
+    return [
+        {
+            **device,
+            "neighbors_json": json.dumps(device["neighbors"]),
+        }
+        for device in IIT_BHUBANESWAR_DEMO_DEVICES
+    ]

@@ -1,0 +1,56 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: python -m backend.worker
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      BACKEND_URL: http://api:8000
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-change-this-in-production}
+      TELEMETRY_STREAM: ${TELEMETRY_STREAM:-netcoop:telemetry}
+      TELEMETRY_CONSUMER_GROUP: ${TELEMETRY_CONSUMER_GROUP:-netcoop-workers}
+      WORKER_MAX_DELIVERIES: ${WORKER_MAX_DELIVERIES:-5}
+    depends_on:
+      - redis
+      - api
+    restart: unless-stopped
+
+  api:
+    build: .
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_PATH: /data/netcoop.db
+      REDIS_URL: redis://redis:6379/0
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-change-this-in-production}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      BLAST_RADIUS_KM: ${BLAST_RADIUS_KM:-5}
+      TELEMETRY_STREAM: ${TELEMETRY_STREAM:-netcoop:telemetry}
+    volumes:
+      - app-data:/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+
+  dashboard:
+    build: .
+    command: streamlit run frontend/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+    environment:
+      API_URL: http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+
+volumes:
+  redis-data:
+  app-data:

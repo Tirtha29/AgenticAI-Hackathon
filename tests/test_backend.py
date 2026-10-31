@@ -1,9 +1,18 @@
 import json
 import unittest
+from unittest.mock import Mock, patch
 
 from backend.agents.reporting_agent import build_report_parser
+from backend.agents.correlation_agent import (
+    SCORING_WEIGHTS,
+    _score_with_groq,
+    _weighted_score,
+    build_cause_scoring_parser,
+)
+from backend.agents.web_research_agent import has_local_rule_match, web_research_agent
 from backend.common.classes.api import TelemetryIn
-from backend.common.rules import FACT_CATALOG
+from backend.common.classes.correlation import CauseScoreFactors, ProbableCause
+from backend.common.rules import BASE_RULES, CAUSE_RULES, FACT_CATALOG
 from backend.graph import run_workflow
 from backend.main import normalize_payload, parse_inventory
 
@@ -35,6 +44,119 @@ class TelemetryTests(unittest.TestCase):
         parsed = build_report_parser().parse('{"summary":"Insufficient information.","limitations":"Static thresholds only."}')
         self.assertEqual(parsed.summary, "Insufficient information.")
 
+    def test_pydantic_correlation_parser_and_weighted_score(self):
+        parsed = build_cause_scoring_parser().parse(
+            '{"assessments":[{"rule_id":"NET-01","factors":'
+            '{"rule_match":1,"cross_metric":0.8,"severity":0.7,'
+            '"history":0.5,"topology":0.5,"client_confirmation":0.5}}]}'
+        )
+        self.assertEqual(parsed.assessments[0].rule_id, "NET-01")
+        score = _weighted_score(parsed.assessments[0].factors)
+        expected = (
+            1.0 * SCORING_WEIGHTS["rule_match"]
+            + 0.8 * SCORING_WEIGHTS["cross_metric"]
+            + 0.7 * SCORING_WEIGHTS["severity"]
+            + 0.5 * SCORING_WEIGHTS["history"]
+            + 0.5 * SCORING_WEIGHTS["topology"]
+            + 0.5 * SCORING_WEIGHTS["client_confirmation"]
+        )
+        self.assertAlmostEqual(score, expected)
+        with self.assertRaises(ValueError):
+            CauseScoreFactors(
+                rule_match=1.1,
+                cross_metric=0.8,
+                severity=0.7,
+                history=0.5,
+                topology=0.5,
+                client_confirmation=0.5,
+            )
+
+    def test_groq_cause_scores_are_weighted_and_attached_to_report_candidate(self):
+        from langchain_core.messages import AIMessage
+        from langchain_core.runnables import RunnableLambda
+
+        model = RunnableLambda(lambda _: AIMessage(content=(
+            '{"assessments":[{"rule_id":"NET-01","factors":'
+            '{"rule_match":1,"cross_metric":0.8,"severity":0.7,'
+            '"history":0.5,"topology":0.5,"client_confirmation":0.5}}]}'
+        )))
+        candidate = ProbableCause(
+            rule_id="NET-01",
+            cause="Link congestion",
+            probability=0.93,
+            evidence=["link utilization is elevated"],
+            recommended_action="Review congestion",
+        )
+        scored, web_candidates = _score_with_groq(
+            model, [candidate], {"severity": "critical"}, {}
+        )
+        self.assertAlmostEqual(scored[0].probability, 0.755)
+        self.assertEqual(scored[0].score_breakdown.rule_match, 1)
+        self.assertEqual(web_candidates, [])
+
+    def test_tavily_runs_only_when_abnormal_metrics_have_no_local_rule_match(self):
+        state = {
+            "telemetry": {"metrics": {"bandwidth_mbps": 50}},
+            "performance": {"severity": "warning"},
+        }
+        self.assertFalse(has_local_rule_match(state["telemetry"]["metrics"]))
+        response = Mock()
+        response.json.return_value = {"results": [{
+            "title": "Network latency troubleshooting",
+            "url": "https://example.org/network-latency",
+            "content": "Check queue depth and path changes.",
+            "score": 0.91,
+        }]}
+        with patch("backend.agents.web_research_agent.httpx.post", return_value=response) as post:
+            result = web_research_agent(state, api_key="test-key")["web_research"]
+        self.assertEqual(result["status"], "searched")
+        self.assertEqual(result["sources"][0]["url"], "https://example.org/network-latency")
+        self.assertEqual(post.call_args.kwargs["json"]["max_results"], 5)
+
+    def test_tavily_skips_when_a_local_rule_matches(self):
+        state = {
+            "telemetry": {"metrics": {
+                "interface_errors": 120,
+                "packet_loss_pct": 12,
+            }},
+            "performance": {"severity": "critical"},
+        }
+        with patch("backend.agents.web_research_agent.httpx.post") as post:
+            result = web_research_agent(state, api_key="test-key")["web_research"]
+        self.assertTrue(has_local_rule_match(state["telemetry"]["metrics"]))
+        self.assertEqual(result["status"], "local_match_found")
+        post.assert_not_called()
+
+    def test_groq_web_hypotheses_require_and_preserve_tavily_citations(self):
+        from langchain_core.messages import AIMessage
+        from langchain_core.runnables import RunnableLambda
+
+        model = RunnableLambda(lambda _: AIMessage(content=(
+            '{"assessments":[],"web_suggestions":[{"cause":"Possible queue congestion",'
+            '"source_ids":[0],"factors":{"rule_match":0.8,"cross_metric":0.9,'
+            '"severity":0.9,"history":0.5,"topology":0.5,'
+            '"client_confirmation":0.5},"recommended_action":"Check queue counters '
+            'and compare with the device vendor guidance before changing settings."}]}'
+        )))
+        research = {
+            "status": "searched",
+            "sources": [{
+                "source_id": 0,
+                "title": "Queue diagnostics",
+                "url": "https://example.org/queues",
+                "snippet": "Review queue depth and drops.",
+                "relevance": 0.9,
+            }],
+        }
+        _, candidates = _score_with_groq(model, [], {}, research)
+        self.assertEqual(candidates[0].rule_id, "WEB-01")
+        self.assertEqual(candidates[0].sources[0].url, "https://example.org/queues")
+
+    def test_diagnostic_rule_set_has_broader_metric_and_correlation_coverage(self):
+        self.assertGreaterEqual(len(BASE_RULES), 10)
+        self.assertGreaterEqual(len(CAUSE_RULES), 20)
+        self.assertGreater(len(FACT_CATALOG), 2000)
+
     def test_hardware_fault_is_critical(self):
         event = normalize_payload(TelemetryIn(
             device_id="SW_CAMPUS_1",
@@ -62,6 +184,8 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(report["units"]["latency_ms"], "ms")
         self.assertTrue(report["human_review"]["status"] == "pending")
         self.assertEqual(report["probable_causes"][0]["probability"], 0.97)
+        self.assertEqual(report["scoring_method"], "static_fallback")
+        self.assertEqual(sum(report["scoring_weights"].values()), 1)
 
     def test_answered_high_confidence_case_is_ranked_and_verified(self):
         event = normalize_payload(TelemetryIn(
@@ -130,7 +254,7 @@ class TelemetryTests(unittest.TestCase):
         self.assertGreater(report["blast_radius"][0]["probability"], 0.45)
 
     def test_catalog_contains_more_than_one_thousand_context_facts(self):
-        self.assertEqual(len(FACT_CATALOG), 1320)
+        self.assertEqual(len(FACT_CATALOG), 2640)
 
     def test_csv_inventory_parsing(self):
         devices = parse_inventory(

@@ -6,6 +6,7 @@ from backend.agents.normalization_agent import normalize_node
 from backend.agents.performance_agent import performance_agent
 from backend.agents.reporting_agent import report_agent
 from backend.agents.utm_agent import utm_agent
+from backend.agents.web_research_agent import web_research_agent
 
 __all__ = [
     "connectivity_agent",
@@ -16,4 +17,5 @@ __all__ = [
     "performance_agent",
     "report_agent",
     "utm_agent",
+    "web_research_agent",
 ]

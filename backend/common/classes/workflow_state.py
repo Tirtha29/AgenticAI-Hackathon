@@ -16,6 +16,7 @@ class WorkflowState(TypedDict, total=False):
     health: dict[str, Any]
     connectivity: dict[str, Any]
     utm: dict[str, Any]
+    web_research: dict[str, Any]
     correlation: dict[str, Any]
     report: dict[str, Any]
     llm: Any

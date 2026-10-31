@@ -3,6 +3,7 @@ from typing import Any
 from backend.agents.utils import heartbeat
 from backend.common.classes.performance import MetricFinding
 from backend.common.classes.report import IncidentReport, ReportNarrative
+from backend.common.classes.web_research import WebResearchOutput
 from backend.common.classes.workflow_state import WorkflowState
 from backend.common.metrics import METRIC_UNITS
 
@@ -54,15 +55,29 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
             })
 
     limitations = (
-        "Probabilities are deterministic rule confidence values, not calibrated statistical forecasts. "
+        "Groq scores are weighted evidence-based confidence estimates, not calibrated statistical forecasts. "
         "Nearby-device probability is a proximity heuristic, not evidence that the device has failed."
     )
+    if correlation["scoring_method"] == "static_fallback":
+        limitations = (
+            "Groq scoring was not configured; cause scores use static fallback values and are "
+            "not calibrated statistical forecasts. Nearby-device probability is a proximity "
+            "heuristic, not evidence that the device has failed."
+        )
+    web_research = state.get("web_research", {})
+    if web_research.get("status") == "searched":
+        limitations += " External search results are references only and may be outdated or unrelated."
     if state.get("llm") is not None:
         from langchain_core.prompts import ChatPromptTemplate
 
         parser = build_report_parser()
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "Summarize only the verified telemetry and findings. Do not invent causes or change probabilities.\n{format_instructions}"),
+            (
+                "system",
+                "Summarize only verified telemetry and findings. Do not invent causes or "
+                "change scores. State that confidence scores are not statistically calibrated.\n"
+                "{format_instructions}",
+            ),
             ("human", "Report data: {report_data}"),
         ])
         narrative: ReportNarrative = (prompt | state["llm"] | parser).invoke({
@@ -73,6 +88,7 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
                 "verified_causes": ranked,
                 "questions": correlation["questions"],
                 "telemetry": telemetry["metrics"],
+                "web_research": web_research,
             },
         })
         summary = narrative.summary
@@ -95,6 +111,8 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
         ),
         summary=summary,
         confidence_threshold=correlation["confidence_threshold"],
+        scoring_method=correlation["scoring_method"],
+        scoring_weights=correlation["scoring_weights"],
         probable_causes=ranked,
         unverified_candidates=correlation["below_threshold_causes"],
         issue_devices=sorted(issue_by_id.values(), key=lambda item: item["probability"], reverse=True),
@@ -113,6 +131,7 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
             "reviewer": None,
             "feedback": None,
         },
+        web_research=WebResearchOutput.model_validate(state["web_research"]),
         limitations=limitations,
     )
     return {"report": report.model_dump(), **heartbeat("Reporting Agent")}

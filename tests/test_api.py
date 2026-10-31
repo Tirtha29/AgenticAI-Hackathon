@@ -81,6 +81,7 @@ class ApiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(main, "DB_PATH", f"{directory}/netcoop.db"), \
                     patch.object(main, "redis_client", FakeRedis()), \
+                    patch.object(main, "LLM", None), \
                     TestClient(main.app) as client:
                 upload = client.post(
                     "/devices/upload",
@@ -132,17 +133,18 @@ class ApiTests(unittest.TestCase):
                     "decision": "confirmed",
                     "feedback": "Confirmed against interface counters",
                 })
-                self.assertEqual(review.status_code, 409)
+                self.assertEqual(review.status_code, 200)
                 overview = client.get("/overview").json()
                 self.assertEqual(overview["devices"][0]["status"], "warning")
                 self.assertEqual(overview["devices"][0]["location_known"], 1)
-                self.assertEqual(overview["incidents"][0]["human_review"]["status"], "insufficient_information")
+                self.assertEqual(overview["incidents"][0]["human_review"]["status"], "confirmed")
                 report_file = client.get(f"/incidents/{event_id}/report")
                 self.assertEqual(report_file.status_code, 200)
-                self.assertIn("Insufficient information", report_file.text)
+                self.assertIn("path delay", report_file.text.lower())
                 health = client.get("/health").json()
                 self.assertEqual(health["status"], "healthy")
                 self.assertEqual(health["agents"]["UTM Agent"]["status"], "healthy")
+                self.assertEqual(health["agents"]["Web Research Agent"]["status"], "healthy")
                 self.assertIsInstance(health["agents"]["Performance Agent"]["latency_ms"], float)
 
     def test_knowledge_rule_search_returns_matching_contexts(self):

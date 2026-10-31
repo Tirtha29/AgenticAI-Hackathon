@@ -6,7 +6,6 @@ from backend.common.classes.health import HealthAgentOutput
 from backend.common.classes.workflow_state import WorkflowState
 from backend.common.metrics import METRIC_UNITS, NORMAL_RANGES
 
-
 def health_agent(state: WorkflowState) -> dict[str, Any]:
     event = state["telemetry"]
     current_device = state.get("device") or {}

@@ -26,7 +26,7 @@ from backend.common.classes.api import HumanInformationIn, ReviewIn, TelemetryIn
 from backend.common.classes.event_hub import EventHub
 from backend.common.demo_inventory import build_iit_bhubaneswar_inventory
 from backend.common.metrics import ACCEPTED_UNITS, METRIC_ALIASES, METRIC_UNITS, NORMAL_RANGES
-from backend.common.rules import BASE_RULES, FACT_CATALOG
+from backend.common.rules import BASE_RULES, CAUSE_RULES, FACT_CATALOG
 from backend.graph import AGENT_RUNS, HEARTBEATS, WORKFLOW, run_workflow
 
 load_dotenv()
@@ -42,10 +42,13 @@ WORKER_HEARTBEAT_KEY = os.getenv("WORKER_HEARTBEAT_KEY", "netcoop:worker:heartbe
 logger = logging.getLogger(__name__)
 redis_client: Redis | None = None
 LLM = None
-if os.getenv("OPENAI_API_KEY"):
-    from langchain_openai import ChatOpenAI
+if os.getenv("GROQ_API_KEY"):
+    from langchain_groq import ChatGroq
 
-    LLM = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0)
+    LLM = ChatGroq(
+        model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        temperature=0,
+    )
 
 
 @contextmanager
@@ -251,6 +254,7 @@ async def health() -> dict[str, Any]:
         "Health Check Agent": "health",
         "Connectivity Agent": "connectivity",
         "UTM Agent": "utm",
+        "Web Research Agent": "web_research",
         "Correlation Agent": "correlation",
         "Reporting Agent": "reporting",
     }
@@ -307,6 +311,9 @@ async def health() -> dict[str, Any]:
         "queue": queue_status,
         "worker": worker_status,
         "database": database_status,
+        "cause_scoring": "groq_configured" if LLM is not None else "static_fallback",
+        "web_research": "tavily_configured" if os.getenv("TAVILY_API_KEY") else "disabled",
+        "diagnostic_rules": len(BASE_RULES) + len(CAUSE_RULES),
         "static_rules": len(FACT_CATALOG),
     }
 
@@ -780,6 +787,8 @@ async def download_incident_report(incident_id: str) -> Response:
         f"- **Severity:** {report['severity']}",
         f"- **Conclusion:** {report['conclusion']}",
         f"- **Confidence threshold:** {report['confidence_threshold']:.0%}",
+        f"- **Scoring method:** `{report.get('scoring_method', 'static_fallback')}`",
+        f"- **Scoring weights:** {', '.join(f'{name}={value:.0%}' for name, value in report.get('scoring_weights', {}).items())}",
         "",
         report["summary"],
         "",
@@ -790,8 +799,16 @@ async def download_incident_report(incident_id: str) -> Response:
             lines.extend([
                 f"### {index}. {cause['cause']} — {cause['probability']:.0%}",
                 f"- Rule: `{cause['rule_id']}`",
+                *(
+                    [f"- Score factors: {', '.join(f'{name}={value:.0%}' for name, value in cause['score_breakdown'].items())}"]
+                    if cause.get("score_breakdown") else []
+                ),
                 f"- Evidence: {'; '.join(cause['evidence'])}",
                 f"- Recommended action: {cause['recommended_action']}",
+                *(
+                    [f"- Sources: {', '.join(source['url'] for source in cause['sources'])}"]
+                    if cause.get("sources") else []
+                ),
             ])
     else:
         lines.append("No cause met the required 90% confidence.")
@@ -801,6 +818,13 @@ async def download_incident_report(incident_id: str) -> Response:
             f"- {cause['cause']} — {cause['probability']:.0%}; "
             f"evidence: {'; '.join(cause['evidence'])}"
             for cause in report["unverified_candidates"]
+        )
+    web_research = report.get("web_research", {})
+    if web_research.get("sources"):
+        lines.extend(["", "## External research (unverified)", ""])
+        lines.extend(
+            f"- [{source['title']}]({source['url']}): {source['snippet']}"
+            for source in web_research["sources"]
         )
     lines.extend(["", "## Device issue map input", ""])
     for device in report["issue_devices"]:

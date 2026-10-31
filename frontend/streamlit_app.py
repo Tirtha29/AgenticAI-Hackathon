@@ -482,7 +482,19 @@ def incident_rows(incidents: list[dict[str, Any]], limit: int = 5) -> None:
 
 def show_incident(incident: dict[str, Any]) -> None:
     st.write(incident.get("summary", ""))
-    st.caption(f"Status: {incident.get('conclusion', 'unknown').replace('_', ' ').title()} · 90% confidence threshold")
+    scoring_method = incident.get("scoring_method", "static_fallback").replace("_", " ").title()
+    st.caption(
+        f"Status: {incident.get('conclusion', 'unknown').replace('_', ' ').title()} · "
+        f"{scoring_method} · {incident.get('confidence_threshold', 0.9):.0%} confidence threshold"
+    )
+    if incident.get("scoring_weights"):
+        st.caption(
+            "Weights: "
+            + " · ".join(
+                f"{name.replace('_', ' ')} {value:.0%}"
+                for name, value in incident["scoring_weights"].items()
+            )
+        )
     causes = incident.get("probable_causes", [])
     if causes:
         st.subheader("Ranked recommendations")
@@ -492,6 +504,29 @@ def show_incident(incident: dict[str, Any]) -> None:
                 f"{cause['recommended_action']}"
             )
             st.caption("Evidence: " + "; ".join(cause.get("evidence", [])))
+            if cause.get("score_breakdown"):
+                st.caption(
+                    "AI factor ratings: "
+                    + " · ".join(
+                        f"{name.replace('_', ' ')} {value:.0%}"
+                        for name, value in cause["score_breakdown"].items()
+                    )
+                )
+            if cause.get("sources"):
+                st.caption(
+                    "External references: "
+                    + " · ".join(
+                        f"[{source['title']}]({source['url']})"
+                        for source in cause["sources"]
+                    )
+                )
+    research = incident.get("web_research", {})
+    if research.get("status") == "searched" and research.get("sources"):
+        with st.expander("Tavily web research (unverified references)"):
+            for source in research["sources"]:
+                st.markdown(f"- [{source['title']}]({source['url']}) — {source['snippet']}")
+    elif research.get("message"):
+        st.caption(f"Web research: {research['message']}")
     questions = incident.get("human_questions", [])
     if questions:
         st.warning("Additional client information is needed before confirming a cause.")

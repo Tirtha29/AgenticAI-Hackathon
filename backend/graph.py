@@ -16,6 +16,7 @@ from backend.agents import (
     performance_agent,
     report_agent,
     utm_agent,
+    web_research_agent,
 )
 from backend.common.classes.workflow_state import WorkflowState
 
@@ -52,6 +53,7 @@ def build_workflow():
     graph.add_node("health", _track_agent("Health Check Agent", health_agent))
     graph.add_node("connectivity", _track_agent("Connectivity Agent", connectivity_agent))
     graph.add_node("utm", _track_agent("UTM Agent", utm_agent))
+    graph.add_node("web_research", _track_agent("Web Research Agent", web_research_agent))
     graph.add_node("correlation", _track_agent("Correlation Agent", correlation_agent))
     graph.add_node("reporting", _track_agent("Reporting Agent", report_agent))
     graph.add_edge(START, "normalization")
@@ -60,7 +62,8 @@ def build_workflow():
     graph.add_edge("infrastructure", "health")
     graph.add_edge("health", "connectivity")
     graph.add_edge("connectivity", "utm")
-    graph.add_edge("utm", "correlation")
+    graph.add_edge("utm", "web_research")
+    graph.add_edge("web_research", "correlation")
     graph.add_edge("correlation", "reporting")
     graph.add_edge("reporting", END)
     return graph.compile()

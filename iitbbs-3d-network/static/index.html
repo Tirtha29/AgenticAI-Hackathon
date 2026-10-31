@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IIT Bhubaneswar network map</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<script type="importmap">
+{"imports":{"three":"/vendor/three.module.js","three/addons/":"/vendor/addons/"}}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<header>
+  <div class="brand glass">
+    <h1>IIT Bhubaneswar network map</h1>
+    <p>Live view of the campus network, block by block</p>
+  </div>
+  <div class="actions">
+    <button id="bOrbit" class="on">Orbit</button>
+    <button id="bWalk">Walk</button>
+    <button id="bGate">Close gate</button>
+    <button id="bReset">Reset view</button>
+    <a class="btn" href="/diagnostics">Open diagnostics</a>
+  </div>
+</header>
+
+<aside id="list" class="glass" aria-label="Buildings"></aside>
+
+<section id="panel" class="glass" aria-live="polite">
+  <button class="x" id="pClose" aria-label="Close">x</button>
+  <h3 id="pName"></h3>
+  <p class="sub" id="pDesc"></p>
+  <div class="mood"><span id="pFace" role="img"></span><span class="badge" id="pBadge"></span></div>
+  <div class="grid" id="pGrid"></div>
+  <button id="pRun">Run diagnostics</button>
+  <ul id="steps"></ul>
+</section>
+
+<div id="hint" class="glass"></div>
+<div id="legend" class="glass"></div>
+<div id="load">Loading campus...</div>
+
+<script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

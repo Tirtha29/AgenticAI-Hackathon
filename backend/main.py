@@ -498,16 +498,19 @@ def parse_inventory(data: bytes, filename: str) -> list[dict[str, Any]]:
             except (TypeError, ValueError):
                 latitude = None
                 longitude = None
-        devices.append({
+        device_data = {
             "device_id": device_id,
             "name": str(row.get("name") or device_id),
             "device_type": str(row.get("device_type") or "network device").lower(),
             "vendor": str(row.get("vendor") or ""),
-            "latitude": latitude,
-            "longitude": longitude,
             "location_known": location_known,
             "neighbors_json": json.dumps(sorted(set(connections))),
-        })
+        }
+        if latitude is not None:
+            device_data["latitude"] = latitude
+        if longitude is not None:
+            device_data["longitude"] = longitude
+        devices.append(device_data)
     if not devices:
         raise HTTPException(status_code=422, detail="No valid devices found; each row needs a device_id.")
     if len({device["device_id"] for device in devices}) != len(devices):

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Network diagnostics - IIT Bhubaneswar</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>html,body{overflow:auto}main{max-width:980px;margin:0 auto;padding:24px 16px}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--mute);font-weight:600;font-size:12px}td.n{font-variant-numeric:tabular-nums}</style></head>
+<body><main>
+<p><a class="btn" href="/">Back to 3D map</a></p>
+<h1>Network diagnostics</h1>
+<p style="color:var(--mute)">This page is the starting point for your diagnostic website. It reads the same /api/network feed as the map.</p>
+<div class="glass" style="padding:8px 12px;overflow:auto"><table id="t"><thead><tr><th>Building</th><th>Status</th><th>Latency</th><th>Loss</th><th>Down Mbps</th><th>Clients</th><th>APs</th></tr></thead><tbody></tbody></table></div>
+</main>
+<script>
+let names={};
+async function go(){
+ if(!Object.keys(names).length){(await (await fetch('/api/buildings')).json()).forEach(b=>names[b.id]=b.name)}
+ const d=await (await fetch('/api/network')).json(); const tb=document.querySelector('tbody'); tb.textContent='';
+ for(const [id,m] of Object.entries(d.blocks)){
+  const tr=tb.insertRow(); const c=(t,cls)=>{const td=tr.insertCell(); td.textContent=t; if(cls)td.className=cls; return td};
+  c(names[id]||id); const s=c(''); const b=document.createElement('span'); b.className='badge '+m.status;
+  b.textContent=({ok:'😊 Healthy',warn:'😐 Degraded',down:'😠 Down'})[m.status]||'⏳ Waiting for data'; s.appendChild(b);
+  c(m.latency_ms+' ms','n');c(m.loss_pct+' %','n');c(m.down_mbps,'n');c(m.clients,'n');c(m.aps_online+'/'+m.aps_total,'n');}
+}
+go(); setInterval(go,2000);
+</script></body></html>

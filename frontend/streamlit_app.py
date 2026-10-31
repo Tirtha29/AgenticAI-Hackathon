@@ -6,7 +6,12 @@ import json
 import math
 import os
 import random
+import socket
+import subprocess
+import sys
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -14,6 +19,7 @@ import altair as alt
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from frontend.event_simulation import render_simulation
 from dotenv import load_dotenv
 
@@ -384,13 +390,139 @@ def device_neighbors(device: dict[str, Any]) -> list[str]:
     return [str(item) for item in raw] if isinstance(raw, list) else []
 
 
+def render_campus_scene(
+    points: list[dict[str, Any]],
+    *,
+    height: int = 440,
+) -> None:
+    """Render a campus-style 3D background with device markers overlaid by status color."""
+    buildings = [
+        {"name": "Main Gate", "x": 110, "y": 430, "w": 170, "h": 36, "fill": "#efdfb8"},
+        {"name": "Academic Admin", "x": 260, "y": 280, "w": 170, "h": 72, "fill": "#f4e8d3"},
+        {"name": "Auditorium", "x": 175, "y": 155, "w": 150, "h": 70, "fill": "#e9e0d0"},
+        {"name": "Library", "x": 70, "y": 195, "w": 150, "h": 82, "fill": "#dfe8f6"},
+        {"name": "Academic Complex", "x": 470, "y": 195, "w": 220, "h": 100, "fill": "#d9e7f8"},
+        {"name": "Sports Complex", "x": 500, "y": 330, "w": 200, "h": 90, "fill": "#cfe4d8"},
+        {"name": "Core NOC", "x": 440, "y": 430, "w": 120, "h": 62, "fill": "#b8d8e6"},
+        {"name": "Hostel Block 1", "x": 40, "y": 500, "w": 120, "h": 54, "fill": "#d8d7e5"},
+        {"name": "Hostel Block 2", "x": 185, "y": 500, "w": 120, "h": 54, "fill": "#d8d7e5"},
+        {"name": "Hostel Block 3", "x": 330, "y": 500, "w": 120, "h": 54, "fill": "#d8d7e5"},
+        {"name": "Lecture Hall", "x": 20, "y": 80, "w": 150, "h": 62, "fill": "#e9d4bb"},
+    ]
+    building_svg = "".join(
+        f'''
+        <g>
+          <polygon points="{b['x']},{b['y']} {b['x']+b['w']},{b['y']} {b['x']+b['w']+18},{b['y']+10} {b['x']+18},{b['y']+10}" fill="rgba(20, 32, 58, 0.18)"/>
+          <polygon points="{b['x']+b['w']},{b['y']} {b['x']+b['w']+18},{b['y']+10} {b['x']+b['w']+18},{b['y']+b['h']+10} {b['x']+b['w']},{b['y']+b['h']}" fill="rgba(18, 27, 46, 0.18)"/>
+          <rect x="{b['x']}" y="{b['y']}" width="{b['w']}" height="{b['h']}" rx="8" fill="{b['fill']}" stroke="rgba(21,30,52,0.38)" stroke-width="1.2"/>
+          <text x="{b['x'] + b['w'] / 2}" y="{b['y'] + b['h'] / 2 + 2}" text-anchor="middle" font-size="11" font-family="Segoe UI, sans-serif" fill="#1b2740" opacity="0.8">{b['name']}</text>
+        </g>
+        '''
+        for b in buildings
+    )
+
+    status_colors = {
+        "healthy": "#22c55e",
+        "warning": "#fbbf24",
+        "critical": "#ef4444",
+        "unknown": "#94a3b8",
+    }
+    marker_svg = "".join(
+        f'''
+        <g transform="translate({p['x']} {p['y']})">
+          <path d="M0,-12 L9,8 L0,0 L-9,8 Z" fill="{status_colors.get(p['status'], '#94a3b8')}" stroke="rgba(255,255,255,0.8)" stroke-width="1.4"/>
+          <circle cx="0" cy="0" r="2.8" fill="white" opacity="0.9"/>
+          <title>{p['name']} · {p['status']}</title>
+        </g>
+        '''
+        for p in points
+    )
+
+    html = f"""
+    <div style="width:100%; height:{height}px; border-radius:18px; overflow:hidden; border:1px solid rgba(148,163,184,0.35); background:linear-gradient(180deg,#edf5ff 0%,#dfeaf8 48%,#ccdef4 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);">
+      <svg viewBox="0 0 860 620" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="campusGround" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stop-color="#eaf5ec"/>
+            <stop offset="100%" stop-color="#cfe8d1"/>
+          </linearGradient>
+        </defs>
+        <rect width="860" height="620" fill="url(#campusGround)"/>
+        <path d="M0,480 C170,470 240,440 350,440 C520,440 620,520 860,500 L860,620 L0,620 Z" fill="rgba(90,124,86,0.23)"/>
+        <path d="M60,120 C190,80 300,70 420,110 C560,150 700,160 820,80 L820,0 L0,0 L0,120 Z" fill="rgba(255,255,255,0.35)"/>
+        <g opacity="0.96">{building_svg}</g>
+        <g>{marker_svg}</g>
+      </svg>
+    </div>
+    """
+    components.html(html, height=height, scrolling=False)
+
+
+def find_3d_campus_root() -> Path | None:
+    candidates = [
+        Path(__file__).resolve().parents[1] / "iitbbs-3d-network",
+        Path("/Users/shreyanshmishra/Desktop/Personal/AgenticAI-Hackathon/iitbbs-3d-network"),
+        Path("/Users/shreyanshmishra/Desktop/Personal/Projects/AgenticAI-Hackathon/iitbbs-3d-network"),
+    ]
+    for candidate in candidates:
+        if candidate.exists() and (candidate / "app.py").exists():
+            return candidate
+    return None
+
+
+def ensure_3d_campus_server(root: Path) -> bool:
+    port = 5000
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+            free = True
+        except OSError:
+            free = False
+
+    if not free:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            pass
+
+    subprocess.Popen(
+        [sys.executable, "app.py"],
+        cwd=str(root),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    for _ in range(40):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                return True
+        except OSError:
+            time.sleep(0.2)
+    return False
+
+
+def render_3d_campus_if_available(height: int = 360) -> bool:
+    root = find_3d_campus_root()
+    if not root:
+        return False
+    if ensure_3d_campus_server(root):
+        components.iframe("http://127.0.0.1:5000", height=height, scrolling=False)
+        return True
+    return False
+
+
 def render_topology(
     devices: list[dict[str, Any]],
     *,
     height: int = 360,
     highlight_ids: set[str] | None = None,
 ) -> None:
-    """Render the campus geospatial map using device latitude/longitude metadata."""
+    """Render the campus map; prefer the supplied 3D campus app when available."""
+    if render_3d_campus_if_available(height=height):
+        return
+
     if not devices:
         st.info("Upload a connected-device inventory to render the campus map.")
         return
@@ -412,31 +544,23 @@ def render_topology(
             "longitude": float(longitude),
             "risk_probability": float(device.get("risk_probability", 0.0) or 0.0),
             "highlight": str(device.get("device_id") or "") in highlights,
+            "x": 0.0,
+            "y": 0.0,
         })
 
     if not points:
         st.info("No latitude/longitude data is present in the current device inventory.")
         return
 
-    df = pd.DataFrame(points)
-    color_map = {
-        "healthy": [34, 197, 94, 200],
-        "warning": [250, 204, 21, 205],
-        "critical": [239, 68, 68, 220],
-        "unknown": [148, 163, 184, 170],
-    }
-    df["color"] = df["status"].map(color_map).apply(lambda value: value if isinstance(value, list) else [148, 163, 184, 170])
-    df["radius"] = df["highlight"].map({True: 24, False: 16}).astype(float)
-
-    st.map(
-        data=df[["latitude", "longitude"]],
-        latitude=df["latitude"].mean(),
-        longitude=df["longitude"].mean(),
-        zoom=15,
-        use_container_width=True,
-    )
+    lat_min, lat_max = min(item["latitude"] for item in points), max(item["latitude"] for item in points)
+    lon_min, lon_max = min(item["longitude"] for item in points), max(item["longitude"] for item in points)
+    for item in points:
+        item["x"] = 90 + ((item["longitude"] - lon_min) / (lon_max - lon_min + 1e-6)) * 680
+        item["y"] = 540 - ((item["latitude"] - lat_min) / (lat_max - lat_min + 1e-6)) * 430
+    render_campus_scene(points, height=height)
 
     md(status_legend())
+    df = pd.DataFrame(points)
     st.dataframe(
         df[["device_id", "name", "device_type", "status", "latitude", "longitude", "risk_probability"]].sort_values("device_id").reset_index(drop=True),
         hide_index=True,

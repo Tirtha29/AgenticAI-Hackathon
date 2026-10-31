@@ -6,6 +6,7 @@ import json
 import math
 import os
 import random
+import secrets
 import socket
 import subprocess
 import sys
@@ -248,6 +249,11 @@ h1,h2,h3,h4{color:var(--ink);letter-spacing:-.02em;}
 .agent-name{color:#27334f;font-size:.9rem;font-weight:650;line-height:1.2;}
 .agent-meta{color:var(--muted);font-size:.76rem;margin-top:3px;}
 .agent-spark{line-height:0;flex-shrink:0;}
+.overview-agent-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:8px;}
+.overview-agent-card{display:flex;align-items:center;gap:10px;min-width:0;padding:12px;border:1px solid #e9edf5;border-radius:14px;background:rgba(255,255,255,.72);}
+.overview-agent-details{min-width:0;flex:1;}
+.overview-agent-name{color:#27334f;font-size:.82rem;font-weight:700;line-height:1.2;}
+.overview-agent-meta{color:var(--muted);font-size:.72rem;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .status-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:#9aa3b5;}
 .status-healthy{background:var(--green);} .status-ready{background:#55a5ff;}
 .status-degraded,.status-stale,.status-unavailable{background:var(--red);}
@@ -503,12 +509,43 @@ def ensure_3d_campus_server(root: Path) -> bool:
     return False
 
 
-def render_3d_campus_if_available(height: int = 360) -> bool:
+def render_3d_campus_if_available(
+    devices: list[dict[str, Any]],
+    *,
+    height: int = 360,
+    highlight_ids: set[str] | None = None,
+    map_key: str = "default",
+) -> bool:
     root = find_3d_campus_root()
     if not root:
         return False
     if ensure_3d_campus_server(root):
-        components.iframe("http://127.0.0.1:5000", height=height, scrolling=False)
+        inventory_id = st.session_state.setdefault(
+            f"campus_3d_inventory_id_{map_key}", secrets.token_urlsafe(16)
+        )
+        highlighted = highlight_ids or set()
+        payload = [
+            {
+                **device,
+                "highlighted": str(device.get("device_id") or "") in highlighted,
+            }
+            for device in devices
+        ]
+        try:
+            response = requests.put(
+                f"http://127.0.0.1:5000/api/inventory/{quote(inventory_id, safe='')}",
+                json=payload,
+                timeout=3,
+            )
+            response.raise_for_status()
+        except requests.RequestException as error:
+            st.warning(f"Could not sync device inventory to the 3D campus map: {error}")
+            return False
+        components.iframe(
+            f"http://127.0.0.1:5000/?inventory_id={quote(inventory_id, safe='')}",
+            height=height,
+            scrolling=False,
+        )
         return True
     return False
 
@@ -518,9 +555,15 @@ def render_topology(
     *,
     height: int = 360,
     highlight_ids: set[str] | None = None,
+    map_key: str = "default",
 ) -> None:
     """Render the campus map; prefer the supplied 3D campus app when available."""
-    if render_3d_campus_if_available(height=height):
+    if render_3d_campus_if_available(
+        devices,
+        height=height,
+        highlight_ids=highlight_ids,
+        map_key=map_key,
+    ):
         return
 
     if not devices:
@@ -1072,12 +1115,12 @@ def render_overview(data: dict[str, Any], health: dict[str, Any]) -> None:
         + "</div>"
     )
 
-    left, mid, right = st.columns([1.65, 1.1, 0.85])
+    left, right = st.columns([2, 1])
     with left, st.container(border=True):
         md(card_header(icon("pin", 16, "currentColor", 2.2), "#ef5c62", "Campus Device Map", status_legend()))
-        render_topology(devices, height=440)
+        render_topology(devices, height=520, map_key="overview-main")
 
-    with mid:
+    with right:
         with st.container(border=True):
             head, selector = st.columns([1.5, 1])
             with head:
@@ -1126,13 +1169,29 @@ def render_overview(data: dict[str, Any], health: dict[str, Any]) -> None:
                     rows.append(("#98a2b8", "Unknown", counts["unknown"]))
                 md("".join(f'<div class="dl-row"><span><i style="background:{c}"></i>{n_}</span><b>{v}</b></div>' for c, n_, v in rows))
 
-    with right, st.container(border=True):
+    with st.container(border=True):
         head, link = st.columns([2, 1])
         with head:
             md(card_header(icon("activity", 16, "currentColor", 2.2), "#22a06b", "Agent Control Center"))
         with link:
             st.button("View All →", key="viewall_agents", on_click=go_to, args=("Agent Control Center",))
-        show_agent_panel(health, compact=True)
+        agent_cards = []
+        for name, details in health.get("agents", {}).items():
+            display_name = "Recommendation & Correlation Agent" if name == "Correlation Agent" else name
+            latency = details.get("latency_ms")
+            response = f"{latency:g} ms" if isinstance(latency, (int, float)) else (
+                "Service monitor" if name == "Common Monitoring Agent" else "Waiting for first run"
+            )
+            status = details.get("status", "unavailable")
+            glyph, color = agent_style(name)
+            agent_cards.append(
+                f'<div class="overview-agent-card">'
+                f'<span class="agent-icon" style="background:{color}1f;color:{color}">{icon(glyph, 19, color, 2)}</span>'
+                f'<div class="overview-agent-details"><div class="overview-agent-name">{html.escape(display_name)}</div>'
+                f'<div class="overview-agent-meta"><span class="status-dot status-{status_class(status)}"></span>'
+                f'{html.escape(status.title())} · {html.escape(response)}</div></div></div>'
+            )
+        md(f'<div class="overview-agent-grid">{"".join(agent_cards)}</div>')
 
     left, middle, right = st.columns([1.1, 1, 1.3])
     with left, st.container(border=True):
@@ -1154,13 +1213,12 @@ def render_overview(data: dict[str, Any], health: dict[str, Any]) -> None:
         if hot:
             render_topology(
                 devices,
-                height=225,
+                height=360,
                 highlight_ids={item["device_id"] for item in hot},
+                map_key="overview-hot-zones",
             )
-            st.caption(" · ".join(f"{item['device_id']} · {item['risk_probability']:.0%}" for item in hot[:4]))
         else:
-            render_topology(devices, height=225)
-            st.caption("Awaiting telemetry before highlighting affected devices.")
+            render_topology(devices, height=360, map_key="overview-hot-zones")
 
     with right, st.container(border=True):
         md(card_header(icon("book-open", 16, "currentColor", 2.2), "#4f83ff", "Knowledge Base Explorer"))
@@ -1222,7 +1280,7 @@ def render_inventory(data: dict[str, Any]) -> None:
         st.dataframe(frame[columns], hide_index=True, use_container_width=True)
         st.download_button("Download inventory CSV", frame[columns].to_csv(index=False), "device-inventory.csv", "text/csv")
     with st.container(border=True):
-        render_topology(devices, height=540)
+        render_topology(devices, height=540, map_key="device-inventory")
 
 
 def render_incidents(data: dict[str, Any]) -> None:
@@ -1330,7 +1388,7 @@ def main() -> None:
     elif page == "Live Network Map":
         devices = data.get("devices", [])
         with st.container(border=True):
-            render_topology(devices, height=650)
+            render_topology(devices, height=650, map_key="live-network")
     elif page == "Event Simulation":
         render_simulation(data.get("devices", []))
     elif page == "Device Inventory":

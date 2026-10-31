@@ -1,11 +1,14 @@
 import json, os, random, time, urllib.request
-from flask import Flask, jsonify, send_from_directory, redirect, abort
+from datetime import datetime, timezone
+from flask import Flask, jsonify, request, send_from_directory, redirect, abort
 import pydac_adapter
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder=os.path.join(ROOT, "static"), static_url_path="/static")
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 BUILDINGS = json.load(open(os.path.join(ROOT, "data", "buildings.json"), encoding="utf-8"))
 BY_ID = {b["id"]: b for b in BUILDINGS}
+INVENTORIES = {}
 
 # ---------- simulator (used when PyDAC is not connected) ----------
 STATE = {}
@@ -71,6 +74,61 @@ def diagnostics(): return send_from_directory(app.static_folder, "diagnostics.ht
 
 @app.get("/api/buildings")
 def api_buildings(): return jsonify(BUILDINGS)
+
+@app.put("/api/inventory/<inventory_id>")
+def update_inventory(inventory_id):
+    if len(inventory_id) > 80:
+        abort(400, description="Invalid inventory ID.")
+    devices = request.get_json(silent=True)
+    if not isinstance(devices, list):
+        abort(400, description="Inventory must be a JSON array.")
+    if len(devices) > 1500:
+        abort(413, description="Inventory is limited to 1,500 devices.")
+
+    normalized = []
+    for device in devices:
+        if not isinstance(device, dict):
+            abort(400, description="Every inventory entry must be an object.")
+        device_id = str(device.get("device_id") or "").strip()
+        try:
+            latitude = float(device["latitude"])
+            longitude = float(device["longitude"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not device_id or not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            continue
+        try:
+            risk = float(device.get("risk_probability") or 0)
+        except (TypeError, ValueError):
+            risk = 0
+        normalized.append({
+            "device_id": device_id[:120],
+            "name": str(device.get("name") or device_id)[:160],
+            "device_type": str(device.get("device_type") or "network device")[:80].lower(),
+            "status": str(device.get("status") or "unknown")[:40].lower(),
+            "latitude": latitude,
+            "longitude": longitude,
+            "risk_probability": min(1.0, max(0.0, risk)),
+            "neighbors": device.get("neighbors", []),
+            "highlighted": bool(device.get("highlighted", False)),
+        })
+
+    INVENTORIES[inventory_id] = {
+        "devices": normalized,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if len(INVENTORIES) > 100:
+        oldest_id = min(INVENTORIES, key=lambda key: INVENTORIES[key]["updated_at"])
+        if oldest_id != inventory_id:
+            INVENTORIES.pop(oldest_id, None)
+    return jsonify({"device_count": len(normalized), "updated_at": INVENTORIES[inventory_id]["updated_at"]})
+
+@app.get("/api/inventory/<inventory_id>")
+def get_inventory(inventory_id):
+    inventory = INVENTORIES.get(inventory_id)
+    if inventory is None:
+        abort(404, description="Inventory snapshot not found; refresh the dashboard map.")
+    return jsonify(inventory)
 
 @app.get("/api/network")
 def api_network():

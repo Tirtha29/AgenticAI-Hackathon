@@ -82,6 +82,8 @@ for (let i = 0; i < 9; i++) {
 const buildings = await (await fetch('/api/buildings')).json();
 const byId = Object.fromEntries(buildings.map(b => [b.id, b]));
 buildings.forEach(b => { b.top = b.shape === 'dome' ? 23 : b.shape === 'library' ? b.h + 6 : b.shape === 'mainbuilding' ? 34 : b.shape === 'lecturehall' ? 22 : b.shape === 'courtyard' ? b.h + 4 : b.shape === 'school' ? b.h + 4 : b.id === 'noc' ? b.h + 12 : b.id === 'gate' ? 14.5 : b.id === 'sports' ? 3 : b.h + 1; });
+const inventoryId = new URLSearchParams(location.search).get('inventory_id');
+let inventoryDeviceCount = 0;
 
 /* ---------- roads, pond ---------- */
 const roadRects = [];
@@ -118,6 +120,183 @@ function makeLabel(text) {
   x.fillStyle = '#fff'; x.textBaseline = 'middle'; x.fillText(text, 18, 29);
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), sizeAttenuation: false, depthTest: false, transparent: true, fog: false }));
   s.scale.set(w / 56 * .034, .034, 1); s.renderOrder = 10; return s;
+}
+function makeDeviceLabel(text) {
+  const c = document.createElement('canvas'), x = c.getContext('2d');
+  x.font = '700 23px "Segoe UI",Arial,sans-serif';
+  const w = Math.ceil(x.measureText(text).width) + 18; c.width = w; c.height = 48;
+  x.font = '700 23px "Segoe UI",Arial,sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.lineJoin = 'round'; x.lineWidth = 6; x.strokeStyle = 'rgba(255,255,255,.95)'; x.strokeText(text, w / 2, 24);
+  x.fillStyle = '#17213d'; x.fillText(text, w / 2, 24);
+  const texture = new THREE.CanvasTexture(c); texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, sizeAttenuation: false, depthTest: false, transparent: true }));
+  sprite.scale.set(w / 48 * .022, .022, 1); sprite.renderOrder = 13;
+  return sprite;
+}
+const inventoryGroup = new THREE.Group();
+scene.add(inventoryGroup);
+let inventorySignature = '';
+const inventoryLabels = new Map();
+const DEVICE_COLORS = {
+  router: 0x3b82f6,
+  switch: 0x22a06b,
+  'access point': 0xf0b429,
+  firewall: 0xf97316,
+  gateway: 0x8b5cf6,
+};
+const DEVICE_MOODS = {
+  critical: { label: 'Critical', emoji: '😭' },
+  severe: { label: 'Severe', emoji: '😟' },
+  warning: { label: 'Warning', emoji: '😐' },
+  stable: { label: 'Stable', emoji: '🙂' },
+  healthy: { label: 'Healthy', emoji: '😊' },
+  unknown: { label: 'Unknown', emoji: '⏳' },
+};
+function deviceMood(device) {
+  const status = String(device.status || 'unknown').trim().toLowerCase();
+  if (status === 'critical' || status === 'down') return DEVICE_MOODS.critical;
+  if (status === 'severe') return DEVICE_MOODS.severe;
+  if (status === 'warning' || status === 'warn' || status === 'degraded') return DEVICE_MOODS.warning;
+  if (status === 'stable') return DEVICE_MOODS.stable;
+  if (status === 'healthy' || status === 'ok' || status === 'normal') return DEVICE_MOODS.healthy;
+  return DEVICE_MOODS.unknown;
+}
+function renderInventoryList(devices) {
+  list.textContent = '';
+  const heading = document.createElement('h2');
+  heading.textContent = `Device Inventory (${devices.length})`;
+  list.appendChild(heading);
+  if (!devices.length) {
+    const empty = document.createElement('p');
+    empty.className = 'inventory-empty';
+    empty.textContent = 'No devices in the current inventory.';
+    list.appendChild(empty);
+    return;
+  }
+  devices.forEach(device => {
+    const mood = deviceMood(device);
+    const hasLocation = Number.isFinite(device.latitude) && Number.isFinite(device.longitude);
+    const displayName = String(device.name || device.device_id).replace(/^synthetic\s*(?:[·|:-]\s*)?/i, '');
+    const row = document.createElement('button');
+    row.className = `row inventory-row inventory-${mood.label.toLowerCase()}`;
+    row.title = `${displayName} · ${mood.label}${hasLocation ? '' : ' · location unavailable'}`;
+    row.disabled = !hasLocation;
+    const face = document.createElement('span');
+    face.className = 'status-emoji';
+    face.textContent = mood.emoji;
+    face.setAttribute('aria-label', mood.label);
+    const name = document.createElement('span');
+    name.className = 'inventory-name';
+    name.textContent = displayName || device.device_id;
+    const status = document.createElement('small');
+    status.textContent = hasLocation ? mood.label : 'No location';
+    row.append(face, name, status);
+    if (hasLocation) {
+      row.onclick = () => {
+        selectInventoryDevice(device);
+        flyToInventoryDevice(device);
+      };
+    }
+    list.appendChild(row);
+  });
+}
+function renderMapLegend(inventoryMode) {
+  document.body.classList.toggle('has-device-inventory', inventoryMode);
+  const statusItems = MOOD_ORDER.map(key =>
+    `<span title="${MOODS[key].hint}"><span class="legend-emoji" role="img" aria-label="${MOODS[key].label}">${MOODS[key].emoji}</span>${MOODS[key].label}</span>`
+  ).join('');
+  const deviceItems = Object.entries(DEVICE_COLORS).map(([type, color]) =>
+    `<span><i style="width:9px;height:9px;border-radius:50%;background:#${color.toString(16).padStart(6, '0')}"></i>${type}</span>`
+  ).join('');
+  $('#legend').innerHTML = (inventoryMode ? deviceItems : statusItems) + '<span id="src"></span>';
+}
+function inventoryPosition(device) {
+  return {
+    x: 45 + (device.longitude - 85.678) * 30000,
+    z: 20 + (20.1525 - device.latitude) * 30000,
+  };
+}
+function setInventoryMarkers(devices) {
+  inventoryGroup.traverse(object => {
+    if (object.material?.map) object.material.map.dispose();
+    object.geometry?.dispose();
+    if (Array.isArray(object.material)) object.material.forEach(material => material.dispose());
+    else object.material?.dispose();
+  });
+  inventoryGroup.clear();
+  inventoryLabels.clear();
+  for (let index = pickables.length - 1; index >= 0; index--) {
+    if (pickables[index].userData.inventoryDevice) pickables.splice(index, 1);
+  }
+  const located = devices.filter(device =>
+    Number.isFinite(device.latitude) && Number.isFinite(device.longitude)
+  );
+  renderInventoryList(devices);
+  located.forEach(device => {
+    const type = String(device.device_type || '').toLowerCase();
+    const color = DEVICE_COLORS[type] ?? 0x6253b7;
+    const { x, z } = inventoryPosition(device);
+    const geometry = type === 'router' ? new THREE.OctahedronGeometry(5.5)
+      : type === 'switch' ? new THREE.BoxGeometry(6, 6, 6)
+      : type === 'access point' ? new THREE.SphereGeometry(4.3, 10, 8)
+      : type === 'firewall' ? new THREE.CylinderGeometry(4.5, 4.5, 3, 8)
+      : type === 'gateway' ? new THREE.ConeGeometry(4.5, 7, 5)
+      : new THREE.DodecahedronGeometry(4.5);
+    const hostBuilding = buildings.find(building =>
+      Math.abs(x - building.x) < building.w / 2 && Math.abs(z - building.z) < building.d / 2
+    );
+    const anchorY = hostBuilding ? hostBuilding.top + 4 : 3;
+    const marker = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      color, roughness: .48, emissive: color, emissiveIntensity: .3,
+    }));
+    marker.position.set(x, anchorY, z);
+    marker.castShadow = true;
+    marker.userData.inventoryDevice = device;
+    inventoryGroup.add(marker);
+    pickables.push(marker);
+
+    const label = makeDeviceLabel(device.device_id);
+    label.position.set(x, anchorY + 6, z);
+    label.userData.deviceId = device.device_id;
+    label.visible = false;
+    inventoryLabels.set(device.device_id, label);
+    inventoryGroup.add(label);
+
+    if (device.highlighted) {
+      const halo = new THREE.Mesh(
+        new THREE.TorusGeometry(4.3, .45, 6, 24),
+        new THREE.MeshBasicMaterial({ color: 0xef5c62, transparent: true, opacity: .9 }),
+      );
+      halo.rotation.x = -Math.PI / 2;
+      halo.position.set(x, anchorY - 2, z);
+      inventoryGroup.add(halo);
+    }
+  });
+  inventoryDeviceCount = located.length;
+  const inventoryMode = inventoryDeviceCount > 0;
+  Object.values(markers.items).forEach(item => {
+    item.face.visible = !inventoryMode;
+    item.halo.visible = !inventoryMode;
+  });
+  labels.forEach(label => { label.visible = !inventoryMode; });
+  waves.forEach(wave => { wave.mesh.visible = !inventoryMode; });
+  renderMapLegend(inventoryMode);
+}
+async function refreshInventoryMarkers() {
+  if (!inventoryId) return;
+  try {
+    const response = await fetch(`/api/inventory/${encodeURIComponent(inventoryId)}`);
+    if (!response.ok) throw new Error(`inventory request failed (${response.status})`);
+    const inventory = await response.json();
+    const signature = JSON.stringify(inventory.devices);
+    if (signature !== inventorySignature) {
+      setInventoryMarkers(inventory.devices);
+      inventorySignature = signature;
+    }
+  } catch (error) {
+    console.error('Could not refresh campus device inventory:', error);
+    $('#src').textContent = 'Inventory sync unavailable';
+  }
 }
 function block(g, w, h, d, x, y, z, col, bands = true) {
   part(g, new THREE.BoxGeometry(w, h, d), mat(col), x, y + h / 2, z);
@@ -304,7 +483,7 @@ life.populate({
   life.addIdle(-16.5, GZ - 10, Math.PI / 2, { female: true }); life.addIdle(19, GZ - 12, Math.PI * .75); }
 
 /* ---------- UI: list, panel ---------- */
-let net = {}, selected = null, mode = 'orbit';
+let net = {}, selected = null, selectedDevice = null, mode = 'orbit';
 const list = $('#list'), rows = {};
 function buildList() {
   const mk = (title, arr) => {
@@ -325,12 +504,40 @@ buildList();
 
 const T = { ok: 'Healthy', warn: 'Degraded', down: 'Down' };
 function select(id) {
-  selected = id; const b = byId[id];
+  selected = id; selectedDevice = null; $('#pRun').hidden = false; const b = byId[id];
+  inventoryLabels.forEach(label => { label.visible = false; });
   sel.visible = true; sel.position.x = b.x; sel.position.z = b.z; sel.scale.setScalar(Math.max(b.w, b.d) / 2 + 5);
   $('#pName').textContent = b.name; $('#pDesc').textContent = b.desc; $('#steps').textContent = '';
   $('#panel').style.display = 'block'; renderPanel();
 }
+function selectInventoryDevice(device) {
+  selected = null; selectedDevice = device; sel.visible = false; $('#pRun').hidden = true; $('#steps').textContent = '';
+  inventoryLabels.forEach((label, id) => { label.visible = id === device.device_id; });
+  $('#pName').textContent = device.name || device.device_id;
+  $('#pDesc').textContent = `${device.device_type} · ${device.device_id}`;
+  const badge = $('#pBadge'), status = device.status || 'unknown';
+  badge.className = 'badge ' + status; badge.textContent = status.replaceAll('_', ' ').toUpperCase();
+  $('#pFace').textContent = '';
+  $('#pFace').removeAttribute('aria-label');
+  const items = [
+    ['Device ID', device.device_id],
+    ['Type', device.device_type],
+    ['Status', status],
+    ['Latitude', device.latitude.toFixed(5)],
+    ['Longitude', device.longitude.toFixed(5)],
+    ['Risk estimate', `${Math.round((device.risk_probability || 0) * 100)}%`],
+  ];
+  const grid = $('#pGrid'); grid.textContent = '';
+  items.forEach(([key, value]) => {
+    const cell = document.createElement('div'); cell.className = 'stat';
+    const strong = document.createElement('b'); strong.textContent = value;
+    const label = document.createElement('span'); label.textContent = key;
+    cell.append(strong, label); grid.appendChild(cell);
+  });
+  $('#panel').style.display = 'block';
+}
 function renderPanel() {
+  if (selectedDevice) return;
   if (!selected) return; const m = net[selected]; if (!m) return;
   const bd = $('#pBadge'), mood = moodOf(m); bd.className = 'badge ' + m.status;
   bd.textContent = (STATUS_EMOJI[m.status] || STATUS_EMOJI.unk) + ' ' + (T[m.status] || 'Waiting for data') + ' - ' + MOODS[mood].label;
@@ -340,7 +547,10 @@ function renderPanel() {
   const grid = $('#pGrid'); grid.textContent = '';
   items.forEach(([k, v]) => { const d = document.createElement('div'); d.className = 'stat'; const b = document.createElement('b'); b.textContent = v; const s = document.createElement('span'); s.textContent = k; d.append(b, s); grid.appendChild(d); });
 }
-$('#pClose').onclick = () => { $('#panel').style.display = 'none'; sel.visible = false; selected = null; };
+$('#pClose').onclick = () => {
+  $('#panel').style.display = 'none'; sel.visible = false; selected = null; selectedDevice = null; $('#pRun').hidden = false;
+  inventoryLabels.forEach(label => { label.visible = false; });
+};
 $('#pRun').onclick = async () => {
   if (!selected) return; const ul = $('#steps'); ul.textContent = ''; const li = document.createElement('li'); li.textContent = 'Running checks...'; ul.appendChild(li);
   try {
@@ -351,7 +561,7 @@ $('#pRun').onclick = async () => {
 };
 
 function applyNet(data) {
-  net = data.blocks; $('#src').textContent = 'Data: ' + data.source;
+  net = data.blocks; $('#src').textContent = `Data: ${data.source} · ${inventoryDeviceCount} inventory devices`;
   let healthy = 0, hostels = 0;
   for (const [id, m] of Object.entries(net)) {
     const c = COL[m.status];
@@ -370,8 +580,9 @@ function applyNet(data) {
   renderPanel();
 }
 async function poll() { try { applyNet(await (await fetch('/api/network')).json()); } catch { $('#src').textContent = 'Backend offline'; } }
-$('#legend').innerHTML = MOOD_ORDER.map(k => `<span title="${MOODS[k].hint}"><span class="legend-emoji" role="img" aria-label="${MOODS[k].label}">${MOODS[k].emoji}</span>${MOODS[k].label}</span>`).join('') + '<span id="src"></span>';
-await poll(); setInterval(poll, 2000);
+renderMapLegend(false);
+await refreshInventoryMarkers(); await poll();
+setInterval(poll, 2000); setInterval(refreshInventoryMarkers, 3000);
 
 /* ---------- camera: fly, walk ---------- */
 let fly = null;
@@ -384,6 +595,15 @@ function flyTo(id) {
   const dirv = id === 'gate' ? new THREE.Vector3(.3, .22, -.9) : new THREE.Vector3(.5, .6, .9);   // gate: view it from the road outside, like the photos
   const to = tgt.clone().add(dirv.normalize().multiplyScalar(id === 'gate' ? 95 : len));
   fly = { t: 0, p0: camera.position.clone(), p1: to, t0: controls.target.clone(), t1: tgt };
+}
+function flyToInventoryDevice(device) {
+  const marker = inventoryGroup.children.find(object =>
+    object.userData.inventoryDevice?.device_id === device.device_id
+  );
+  const { x, z } = inventoryPosition(device);
+  const target = marker?.position.clone() ?? new THREE.Vector3(x, 2, z);
+  const offset = new THREE.Vector3(18, 14, 22);
+  fly = { t: 0, p0: camera.position.clone(), p1: target.clone().add(offset), t0: controls.target.clone(), t1: target };
 }
 function setMode(m) {
   if (m === mode) return; mode = m;
@@ -398,7 +618,9 @@ function setMode(m) {
 }
 function hint() {
   $('#hint').textContent = mode === 'orbit'
-    ? 'Drag to rotate, scroll to zoom, right-drag to pan. Click a building to see its network.'
+    ? inventoryDeviceCount
+      ? 'Hover a device to identify it; click for inventory details. Drag to rotate and scroll to zoom.'
+      : 'Drag to rotate, scroll to zoom, right-drag to pan. Click a building to see its network.'
     : 'W A S D or arrow keys to move, drag to look around, Shift to run, G to open/close the gate, Esc to leave walk mode.';
 }
 function toggleGate() { if (!gateRes) return; gateRes.setOpen(!gateRes.isOpen()); $('#bGate').textContent = gateRes.isOpen() ? 'Close gate' : 'Open gate'; }
@@ -414,11 +636,31 @@ const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(); let down = null;
 canvas.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY, t: performance.now() }; canvas.setPointerCapture(e.pointerId); });
 canvas.addEventListener('pointermove', e => {
   if (mode === 'walk' && e.buttons) { walk.yaw -= e.movementX * .004; walk.pitch = Math.max(-1.3, Math.min(1.3, walk.pitch - e.movementY * .004)); }
+  else if (mode === 'orbit' && !e.buttons) {
+    ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1); ray.setFromCamera(ndc, camera);
+    const hit = ray.intersectObjects(pickables, false).find(item => item.object.userData.inventoryDevice);
+    const device = hit?.object.userData.inventoryDevice;
+    inventoryLabels.forEach((label, id) => {
+      label.visible = id === device?.device_id || id === selectedDevice?.device_id;
+    });
+    canvas.style.cursor = device ? 'pointer' : '';
+    if (device) $('#hint').textContent = `${device.device_id} · ${device.device_type} · ${device.status}`;
+    else hint();
+  }
+});
+canvas.addEventListener('pointerleave', () => {
+  if (!selectedDevice) inventoryLabels.forEach(label => { label.visible = false; });
+  canvas.style.cursor = '';
+  hint();
 });
 canvas.addEventListener('pointerup', e => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; } down = null;
   ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1); ray.setFromCamera(ndc, camera);
-  const hit = ray.intersectObjects(pickables, false)[0]; if (hit) select(hit.object.userData.id);
+  const hit = ray.intersectObjects(pickables, false)[0];
+  if (hit?.object.userData.inventoryDevice) {
+    selectInventoryDevice(hit.object.userData.inventoryDevice);
+    flyToInventoryDevice(hit.object.userData.inventoryDevice);
+  } else if (hit) select(hit.object.userData.id);
 });
 
 function stepWalk(dt) {
@@ -456,7 +698,9 @@ function frame() {
     for (const p of L.packets) { p.t = (p.t + sp * dt) % 1; L.curve.getPoint(p.dir > 0 ? p.t : 1 - p.t, tmp); p.mesh.position.copy(tmp); }
   }
   clouds.forEach(c => { c.position.x += dt * 3; if (c.position.x > 600) c.position.x = -600; });
-  if (mode === 'walk') labels.forEach(l => l.visible = l.position.distanceTo(camera.position) < 160); else labels.forEach(l => l.visible = true);
+  if (inventoryDeviceCount) labels.forEach(l => { l.visible = false; });
+  else if (mode === 'walk') labels.forEach(l => l.visible = l.position.distanceTo(camera.position) < 160);
+  else labels.forEach(l => { l.visible = true; });
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }

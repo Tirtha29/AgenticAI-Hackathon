@@ -93,7 +93,9 @@ Normalization
   → UTM
   → Web Research
   → Correlation
+  → Simulation
   → Reporting
+  → 3d map
 ```
 
 Each agent is implemented in its own module under [`backend/agents/`](backend/agents/). Shared schemas are under [`backend/common/classes/`](backend/common/classes/).
@@ -117,9 +119,13 @@ Each agent is implemented in its own module under [`backend/agents/`](backend/ag
 - **​8. Correlation Agent** 
 ​ Synthesizes inputs from local static rules, historical trends, performance classifications, topological blast-radius, and client feedback.
 ​Evaluates candidate causes and assigns exact probabilities/confidence scores to possible issues while outputting probable solutions.
-- **​9. Reporting Agent** 
+- **9. Simulation Agent**
+   We ask the users in advance regarding any upcoming events, and the number of people that are going to gather in one place. Then we run a simulation , in the frontend , and based on topological connection decide which devices based on the location of events , will evidently have more load, and thus overload the system . It's basically a warning/ lookahead for the administrator to keep a lookout on the critical and warned devices.
+- **​10. Reporting Agent** 
  ​Holistic synthesis: Takes into account the simulation results for future overload issues, higher/lower trends, historical past data, operator-supplied extra information, static rules, web research, and nearby hopping devices/blast radius.
 ​Generates typed incident reports, deterministic summaries, device statuses, and downloadable files.
+- **11. 3d map Agent**
+  Based on the latitude longitude of the devices present, and the issues caused, the 3d model of IIT Bhubaneswar will show using emojis of 3 colors red,blue and green which devices are up and running and which are the critical points where issue is present and attention is needed.
 
 ​## Supporting Subsystems
 - **​Monitoring Agent (Health Check)** : Exposed through GET /health. Keeps track of the health and execution status of all agents, checking API dependencies (Redis and SQLite), worker heartbeats, and run latencies.
@@ -138,6 +144,8 @@ Each agent is implemented in its own module under [`backend/agents/`](backend/ag
 | **Correlation Agent** | Builds candidate causes from local static rules and the fact catalog, uses telemetry/history/topology/client confirmation as evidence, and ranks causes. The confidence threshold for reporting a verified cause is 90%. When configured, Groq returns a Pydantic-parsed set of factor ratings; the backend calculates the final weighted score. |
 | **Reporting Agent** | Produces the typed incident report, deterministic summary, human questions, device statuses, nearby-risk list, limitations, and downloadable report content. When the Groq narrative path is available, the model may summarize but must not change scores or invent causes. |
 | **Common Monitoring Agent** | Exposed through `GET /health`. Checks API dependencies (Redis and SQLite), worker heartbeat, agent readiness/last executions, and agent run latency/success. The dashboard displays these results in the Agent Control Center. This is runtime health monitoring, not a separate diagnostic graph node. |
+| **Simulation Agent** | Produces simulation and gives a lookahead to the administrator to keep a lookout on certain probable overload devices at the time of event. |
+| **3d map Agent** | Shows a 3d replica of IIT Bhubaneswar , with emojis showing the health of different devices along with diagnostics. |
 
 ### Correlation and confidence
 
@@ -153,6 +161,11 @@ The scoring weights used when model scoring is active are:
 | Client confirmation | 10% |
 
 Scores are bounded heuristic estimates based on those factors. They are **not** model-calibrated real-world probabilities. Without `GROQ_API_KEY`, static rules and deterministic fallback scores are used and labeled in the incident report. Groq API or structured-output failures in cause scoring use the static fallback path; report-narrative failures retain the deterministic summary. Tavily failures are recorded in research status while local diagnosis continues.
+
+## Robustness
+
+Even if one or more of the connected agents are down, the others can work together to find out the exact root cause of the issues caused. The base model class will be used to carry memory throughout execution, and using human in the loop, extra information is taken from the administrator, if available, else not enough information is given as the output.
+The health check agent keeps a check if the other agents are up and running and gives us a live status.
 
 ## Project structure
 

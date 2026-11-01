@@ -15,7 +15,7 @@ from redis.exceptions import ResponseError
 load_dotenv()
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://netcoopai.onrender.com").rstrip("/")
 INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "change-this-in-production")
 TELEMETRY_STREAM = os.getenv("TELEMETRY_STREAM", "netcoop:telemetry")
 DEAD_LETTER_STREAM = os.getenv("DEAD_LETTER_STREAM", "netcoop:telemetry:dead")

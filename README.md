@@ -17,6 +17,8 @@ cp .env.example .env
 
 Edit `.env`:
 
+- `API_URL`: defaults to the deployed backend at `https://netcoopai.onrender.com`; use `http://localhost:8000` only when intentionally connecting the dashboard to a locally running API.
+- `BACKEND_URL`: defaults to `https://netcoopai.onrender.com` for the worker; use `http://localhost:8000` when the worker should process against the local API.
 - `INTERNAL_TOKEN`: replace the placeholder with a random private value, e.g. `openssl rand -hex 32`.
 - `REDIS_URL`: for local Redis use `redis://localhost:6379/0`.
 - `GROQ_API_KEY`: optional; enables Groq cause scoring and report narrative.
@@ -89,7 +91,8 @@ GROQ_API_KEY=
 GROQ_MODEL=llama-3.3-70b-versatile
 INTERNAL_TOKEN=replace-with-a-random-secret
 REDIS_URL=redis://localhost:6379/0
-BACKEND_URL=http://localhost:8000
+API_URL=https://netcoopai.onrender.com
+BACKEND_URL=https://netcoopai.onrender.com
 DATABASE_PATH=./data/netcoop.db
 BLAST_RADIUS_KM=5
 TELEMETRY_STREAM=netcoop:telemetry

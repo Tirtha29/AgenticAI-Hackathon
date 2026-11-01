@@ -21,8 +21,13 @@ import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-from frontend.event_simulation import render_simulation
 from dotenv import load_dotenv
+
+PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from event_simulation import render_simulation
 
 try:
     import pydeck as pdk
@@ -30,7 +35,7 @@ except ImportError:  # pragma: no cover - fallback when pydeck is absent
     pdk = None
 
 load_dotenv()
-API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
+API_URL = os.getenv("API_URL", "https://netcoopai.onrender.com").rstrip("/")
 PAGES = (
     "Overview",
     "Live Network Map",

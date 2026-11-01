@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 load_dotenv()
-API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
+API_URL = os.getenv("API_URL", "https://netcoopai.onrender.com").rstrip("/")
 EVENT_TYPES = ("festival", "sports", "livestream", "exam", "outage")
 
 

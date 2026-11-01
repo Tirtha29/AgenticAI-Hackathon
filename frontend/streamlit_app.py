@@ -714,7 +714,6 @@ def show_incident(incident: dict[str, Any], devices: list[dict[str, Any]]) -> No
         if incident_id in seen_dialogs and not requested_dialog:
             if st.button("Answer follow-up questions", key=f"open-hitl-{incident_id}"):
                 st.session_state["hitl_dialog_requested"] = incident_id
-                st.rerun()
     nearby = incident.get("nearby_connections", [])
     if nearby:
         st.subheader("Topology-nearby watch list")
@@ -1374,7 +1373,6 @@ def render_pending_human_review(data: dict[str, Any]) -> None:
     st.info(f"{len(pending)} incident(s) are waiting for additional information.")
     if st.button("Open pending HITL questions", key="open-pending-hitl"):
         st.session_state["hitl_dialog_requested"] = str(pending[0]["incident_id"])
-        st.rerun()
 
 
 def render_knowledge_base() -> None:

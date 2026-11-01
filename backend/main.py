@@ -32,7 +32,7 @@ from backend.simulation import EVENT_PRESETS, run_simulation
 load_dotenv()
 
 DB_PATH = os.getenv("DATABASE_PATH", "./netcoop.db")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = os.getenv("REDIS_URL", "rediss://default:gQAAAAAAAVKlAAIgcDI4NDRlMDgwNjRmZGQ0ZTFkOGU2NTM4MWI3MDFiNGZkMg@apt-")
 INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "change-this-in-production")
 CONNECTION_HOPS = 3
 QUEUE_STREAM = os.getenv("TELEMETRY_STREAM", "netcoop:telemetry")

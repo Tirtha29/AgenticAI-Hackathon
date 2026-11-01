@@ -10,26 +10,3 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.10
-
-  # Consumes telemetry from Redis Streams and asks the API to process it
-  - type: worker
-    name: netcoopai-telemetry-worker
-    runtime: python
-    plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m backend.worker
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.10
-      - key: REDIS_URL
-        sync: false
-      - key: BACKEND_URL
-        value: https://netcoopai.onrender.com
-      - key: INTERNAL_TOKEN
-        sync: false
-      - key: TELEMETRY_STREAM
-        value: netcoop:telemetry
-      - key: TELEMETRY_CONSUMER_GROUP
-        value: netcoop-workers
-      - key: WORKER_MAX_DELIVERIES
-        value: "5"

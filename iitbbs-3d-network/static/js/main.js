@@ -83,6 +83,7 @@ const buildings = await (await fetch('/api/buildings')).json();
 const byId = Object.fromEntries(buildings.map(b => [b.id, b]));
 buildings.forEach(b => { b.top = b.shape === 'dome' ? 23 : b.shape === 'library' ? b.h + 6 : b.shape === 'mainbuilding' ? 34 : b.shape === 'lecturehall' ? 22 : b.shape === 'courtyard' ? b.h + 4 : b.shape === 'school' ? b.h + 4 : b.id === 'noc' ? b.h + 12 : b.id === 'gate' ? 14.5 : b.id === 'sports' ? 3 : b.h + 1; });
 const inventoryId = new URLSearchParams(location.search).get('inventory_id');
+const showDeviceList = new URLSearchParams(location.search).get('show_device_list') !== '0';
 let inventoryDeviceCount = 0;
 
 /* ---------- roads, pond ---------- */
@@ -202,6 +203,7 @@ function renderInventoryList(devices) {
 }
 function renderMapLegend(inventoryMode) {
   document.body.classList.toggle('has-device-inventory', inventoryMode);
+  document.body.classList.toggle('hide-device-inventory-list', !showDeviceList);
   const statusItems = MOOD_ORDER.map(key =>
     `<span title="${MOODS[key].hint}"><span class="legend-emoji" role="img" aria-label="${MOODS[key].label}">${MOODS[key].emoji}</span>${MOODS[key].label}</span>`
   ).join('');

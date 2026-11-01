@@ -515,6 +515,7 @@ def render_3d_campus_if_available(
     height: int = 360,
     highlight_ids: set[str] | None = None,
     map_key: str = "default",
+    show_device_list: bool = True,
 ) -> bool:
     root = find_3d_campus_root()
     if not root:
@@ -542,7 +543,8 @@ def render_3d_campus_if_available(
             st.warning(f"Could not sync device inventory to the 3D campus map: {error}")
             return False
         components.iframe(
-            f"http://127.0.0.1:5000/?inventory_id={quote(inventory_id, safe='')}",
+            f"http://127.0.0.1:5000/?inventory_id={quote(inventory_id, safe='')}"
+            f"&show_device_list={'1' if show_device_list else '0'}",
             height=height,
             scrolling=False,
         )
@@ -556,6 +558,7 @@ def render_topology(
     height: int = 360,
     highlight_ids: set[str] | None = None,
     map_key: str = "default",
+    show_device_list: bool = True,
 ) -> None:
     """Render the campus map; prefer the supplied 3D campus app when available."""
     if render_3d_campus_if_available(
@@ -563,6 +566,7 @@ def render_topology(
         height=height,
         highlight_ids=highlight_ids,
         map_key=map_key,
+        show_device_list=show_device_list,
     ):
         return
 
@@ -603,12 +607,13 @@ def render_topology(
     render_campus_scene(points, height=height)
 
     md(status_legend())
-    df = pd.DataFrame(points)
-    st.dataframe(
-        df[["device_id", "name", "device_type", "status", "latitude", "longitude", "risk_probability"]].sort_values("device_id").reset_index(drop=True),
-        hide_index=True,
-        use_container_width=True,
-    )
+    if show_device_list:
+        df = pd.DataFrame(points)
+        st.dataframe(
+            df[["device_id", "name", "device_type", "status", "latitude", "longitude", "risk_probability"]].sort_values("device_id").reset_index(drop=True),
+            hide_index=True,
+            use_container_width=True,
+        )
 
 
 def incident_rows(
@@ -1118,7 +1123,7 @@ def render_overview(data: dict[str, Any], health: dict[str, Any]) -> None:
     left, right = st.columns([2, 1])
     with left, st.container(border=True):
         md(card_header(icon("pin", 16, "currentColor", 2.2), "#ef5c62", "Campus Device Map", status_legend()))
-        render_topology(devices, height=520, map_key="overview-main")
+        render_topology(devices, height=520, map_key="overview-main", show_device_list=False)
 
     with right:
         with st.container(border=True):

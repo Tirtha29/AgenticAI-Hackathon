@@ -15,6 +15,7 @@ button:hover,.btn:hover{border-color:var(--accent)}
 button.on{background:var(--accent);color:#0b1b2c;border-color:var(--accent);font-weight:600}
 button:focus-visible,.btn:focus-visible{outline:2px solid #fff;outline-offset:2px}
 #list{position:fixed;left:14px;top:92px;bottom:56px;width:236px;padding:10px;overflow:auto}
+body.hide-device-inventory-list #list{display:none!important}
 #list h2{font-size:12px;margin:8px 6px 6px;color:var(--mute);font-weight:600}
 .row{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:0;background:transparent;padding:7px 8px;border-radius:6px;font-size:13px}
 .row:hover{background:rgba(255,255,255,.08)}

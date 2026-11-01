@@ -157,7 +157,9 @@ def _render_animation(result: dict[str, Any], devices: list[dict[str, Any]]) -> 
 
     html = f"""
     <style>
-      .netcoop-sim {{ width: 100%; min-height: 620px; background: linear-gradient(180deg, rgba(18,27,54,.92), rgba(12,17,28,.96)); border-radius: 14px; overflow: hidden; border: 1px solid rgba(145,160,200,0.35); }}
+      html, body {{ margin: 0; width: 100%; }}
+      .netcoop-sim {{ width: min(100%, 900px); aspect-ratio: 900 / 620; margin: 0 auto; background: linear-gradient(180deg, rgba(18,27,54,.92), rgba(12,17,28,.96)); border-radius: 14px; overflow: hidden; border: 1px solid rgba(145,160,200,0.35); }}
+      .netcoop-sim svg {{ display: block; width: 100%; height: 100%; }}
       .netcoop-sim .edge {{ stroke: rgba(134, 152, 196, 0.7); stroke-width: 2.2; fill: none; stroke-dasharray: 10 10; animation: flow 1.4s linear infinite; }}
       .netcoop-sim .edge.active {{ stroke: rgba(255, 209, 94, 0.9); stroke-width: 3.2; }}
       .netcoop-sim .node .ring {{ fill: none; stroke: rgba(255,255,255,0.0); stroke-width: 3; opacity: 0; }}
@@ -176,7 +178,7 @@ def _render_animation(result: dict[str, Any], devices: list[dict[str, Any]]) -> 
       @keyframes pulse {{ 0% {{ opacity: 0.16; transform: scale(0.92); }} 40% {{ opacity: 0.88; }} 100% {{ opacity: 0.12; transform: scale(1.22); }} }}
     </style>
     <div class="netcoop-sim">
-      <svg viewBox="0 0 900 620" width="100%" height="620" xmlns="http://www.w3.org/2000/svg">
+      <svg viewBox="0 0 900 620" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
         {edge_svg}
         {node_svg}
       </svg>
@@ -231,6 +233,17 @@ def _render_animation(result: dict[str, Any], devices: list[dict[str, Any]]) -> 
         currentFrame = (currentFrame + 1) % frameCount;
         updateFrame(currentFrame);
       }}, 200);
+      const animation = document.querySelector('.netcoop-sim');
+      const resizeFrame = () => {{
+        const height = `${{Math.ceil(animation.getBoundingClientRect().height + 8)}}px`;
+        if (window.frameElement && window.frameElement.style.height !== height) {{
+          window.frameElement.style.height = height;
+        }}
+      }};
+      new ResizeObserver(resizeFrame).observe(animation);
+      window.addEventListener('resize', resizeFrame);
+      setInterval(resizeFrame, 500);
+      resizeFrame();
     </script>
     """
 
@@ -238,6 +251,51 @@ def _render_animation(result: dict[str, Any], devices: list[dict[str, Any]]) -> 
 
 
 def render_simulation(devices: list[dict[str, Any]]) -> None:
+    st.markdown(
+        """
+        <style>
+          [data-testid="stAppViewContainer"] {
+            container-type: inline-size;
+          }
+          @container (max-width: 900px) {
+            body:has(#event-simulation-responsive) [data-testid="stForm"] [data-testid="stHorizontalBlock"],
+            body:has(#event-simulation-responsive) [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) {
+              flex-wrap: wrap !important;
+              gap: .75rem !important;
+            }
+            body:has(#event-simulation-responsive) [data-testid="stForm"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+            body:has(#event-simulation-responsive) [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) > [data-testid="stColumn"] {
+              flex: 1 1 calc(50% - .75rem) !important;
+              min-width: 0 !important;
+              width: auto !important;
+            }
+            body:has(#event-simulation-responsive) [data-testid="stMetricLabel"] {
+              font-size: .78rem;
+            }
+            body:has(#event-simulation-responsive) [data-testid="stMetricValue"] {
+              font-size: clamp(1.05rem, 4vw, 1.55rem);
+              overflow-wrap: anywhere;
+            }
+          }
+          @container (max-width: 600px) {
+            body:has(#event-simulation-responsive) [data-testid="stForm"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+              flex-basis: 100% !important;
+            }
+            body:has(#event-simulation-responsive) [data-testid="stTabs"] [role="tablist"] {
+              max-width: 100%;
+              overflow-x: auto;
+              flex-wrap: nowrap;
+            }
+            body:has(#event-simulation-responsive) [data-testid="stTabs"] [role="tab"] {
+              flex-shrink: 0;
+              white-space: nowrap;
+            }
+          }
+        </style>
+        <div id="event-simulation-responsive" aria-hidden="true"></div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.subheader("What-if event simulation")
     st.caption("Model crowd demand and overload propagation through the declared device connections.")
     st.warning(

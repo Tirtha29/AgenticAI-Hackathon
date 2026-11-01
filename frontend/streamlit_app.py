@@ -7,10 +7,7 @@ import math
 import os
 import random
 import secrets
-import socket
-import subprocess
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,9 +20,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
-PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+FRONTEND_DIR = str(Path(__file__).resolve().parent)
+PROJECT_ROOT = str(Path(FRONTEND_DIR).parent)
+for import_path in (PROJECT_ROOT, FRONTEND_DIR):
+    if import_path not in sys.path:
+        sys.path.insert(0, import_path)
 
 from event_simulation import render_simulation
 
@@ -36,6 +35,10 @@ except ImportError:  # pragma: no cover - fallback when pydeck is absent
 
 load_dotenv()
 API_URL = os.getenv("API_URL", "https://netcoopai.onrender.com").rstrip("/")
+CAMPUS_MAP_URL = os.getenv(
+    "CAMPUS_MAP_URL",
+    "https://netcoopai-campus-map.onrender.com",
+).rstrip("/")
 PAGES = (
     "Overview",
     "Live Network Map",
@@ -309,7 +312,7 @@ st.markdown("<style>" + CSS + nav_icon_css() + "</style>", unsafe_allow_html=Tru
 
 
 def api_get(path: str, **params: Any) -> Any:
-    response = requests.get(f"{API_URL}{path}", params=params or None, timeout=8)
+    response = requests.get(f"{API_URL}{path}", params=params or None, timeout=60)
     response.raise_for_status()
     return response.json()
 
@@ -469,51 +472,6 @@ def render_campus_scene(
     components.html(html, height=height, scrolling=False)
 
 
-def find_3d_campus_root() -> Path | None:
-    candidates = [
-        Path(__file__).resolve().parents[1] / "iitbbs-3d-network",
-        Path("/Users/shreyanshmishra/Desktop/Personal/AgenticAI-Hackathon/iitbbs-3d-network"),
-        Path("/Users/shreyanshmishra/Desktop/Personal/Projects/AgenticAI-Hackathon/iitbbs-3d-network"),
-    ]
-    for candidate in candidates:
-        if candidate.exists() and (candidate / "app.py").exists():
-            return candidate
-    return None
-
-
-def ensure_3d_campus_server(root: Path) -> bool:
-    port = 5000
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            sock.bind(("127.0.0.1", port))
-            free = True
-        except OSError:
-            free = False
-
-    if not free:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return True
-        except OSError:
-            pass
-
-    subprocess.Popen(
-        [sys.executable, "app.py"],
-        cwd=str(root),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    for _ in range(40):
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
-                return True
-        except OSError:
-            time.sleep(0.2)
-    return False
-
-
 def render_3d_campus_if_available(
     devices: list[dict[str, Any]],
     *,
@@ -522,39 +480,37 @@ def render_3d_campus_if_available(
     map_key: str = "default",
     show_device_list: bool = True,
 ) -> bool:
-    root = find_3d_campus_root()
-    if not root:
+    inventory_id = st.session_state.setdefault(
+        f"campus_3d_inventory_id_{map_key}", secrets.token_urlsafe(16)
+    )
+    highlighted = highlight_ids or set()
+    payload = [
+        {
+            **device,
+            "highlighted": str(device.get("device_id") or "") in highlighted,
+        }
+        for device in devices
+    ]
+    try:
+        response = requests.put(
+            f"{CAMPUS_MAP_URL}/api/inventory/{quote(inventory_id, safe='')}",
+            json=payload,
+            timeout=90,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        st.warning(
+            f"Could not connect to the 3D campus map at {CAMPUS_MAP_URL}: {error}. "
+            "Confirm that the campus-map Render service is deployed and CAMPUS_MAP_URL is correct."
+        )
         return False
-    if ensure_3d_campus_server(root):
-        inventory_id = st.session_state.setdefault(
-            f"campus_3d_inventory_id_{map_key}", secrets.token_urlsafe(16)
-        )
-        highlighted = highlight_ids or set()
-        payload = [
-            {
-                **device,
-                "highlighted": str(device.get("device_id") or "") in highlighted,
-            }
-            for device in devices
-        ]
-        try:
-            response = requests.put(
-                f"http://127.0.0.1:5000/api/inventory/{quote(inventory_id, safe='')}",
-                json=payload,
-                timeout=3,
-            )
-            response.raise_for_status()
-        except requests.RequestException as error:
-            st.warning(f"Could not sync device inventory to the 3D campus map: {error}")
-            return False
-        components.iframe(
-            f"http://127.0.0.1:5000/?inventory_id={quote(inventory_id, safe='')}"
-            f"&show_device_list={'1' if show_device_list else '0'}",
-            height=height,
-            scrolling=False,
-        )
-        return True
-    return False
+    components.iframe(
+        f"{CAMPUS_MAP_URL}/?inventory_id={quote(inventory_id, safe='')}"
+        f"&show_device_list={'1' if show_device_list else '0'}",
+        height=height,
+        scrolling=False,
+    )
+    return True
 
 
 def render_topology(

@@ -56,6 +56,12 @@ streamlit run frontend/streamlit_app.py
 
 Open the dashboard at <http://localhost:8501>, API docs at <http://localhost:8000/docs>, and agent/worker health at <http://localhost:8000/health>. Run tests with `python -m unittest discover -s tests -v`.
 
+### Streamlit Community Cloud
+
+When creating or editing the Streamlit app, use the repository `Tirtha29/AgenticAI-Hackathon`, select the `new-main` branch (or merge its latest frontend changes into `main` first), and set the main file to `frontend/streamlit_app.py`. The `main` branch currently has an older frontend import that fails on Streamlit Cloud. Dependencies are read from the root `requirements.txt`. The dashboard defaults to `https://netcoopai.onrender.com`; set `API_URL` in the app's Secrets only if you need to override it.
+
+The 3D campus map is a separate Render web service; Streamlit Cloud cannot embed a server running at `localhost`. Deploy the `netcoopai-campus-map` service from the repository's `render.yaml` Blueprint. After deployment, check its `/api/buildings` health URL returns HTTP 200. The dashboard defaults `CAMPUS_MAP_URL` to `https://netcoopai-campus-map.onrender.com`; if Render assigns a different service URL, set `CAMPUS_MAP_URL` in the Streamlit app's Secrets to that exact HTTPS origin. The dashboard posts each map's inventory snapshot to the map service before embedding its iframe.
+
 The dashboard includes an overview with device health counts, live status and hot-zone maps, recent telemetry charts, incident investigation/HITL, a searchable rule knowledge base, device inventory, analytics, settings, and agent execution health/latency. The sidebar can load 15 synthetic IIT Bhubaneswar campus-area devices; this replaces the current inventory, and the sample coordinates are illustrative rather than surveyed placements. The knowledge explorer is also available through `GET /knowledge/rules?q=latency&limit=20`.
 
 ### Event-impact simulation

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: netcoopai-campus-map
+    runtime: python
+    plan: free
+    rootDir: iitbbs-3d-network
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/buildings
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10

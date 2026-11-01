@@ -16,7 +16,7 @@ EVENT_TYPES = ("festival", "sports", "livestream", "exam", "outage")
 
 
 def _load_presets() -> dict[str, dict[str, Any]]:
-    response = requests.get(f"{API_URL}/simulation/presets", timeout=8)
+    response = requests.get(f"{API_URL}/simulation/presets", timeout=60)
     response.raise_for_status()
     return response.json()["presets"]
 

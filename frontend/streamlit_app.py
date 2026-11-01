@@ -21,7 +21,7 @@ import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-from frontend.event_simulation import render_simulation
+from event_simulation import render_simulation
 from dotenv import load_dotenv
 
 try:

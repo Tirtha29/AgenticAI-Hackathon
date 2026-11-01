@@ -708,12 +708,6 @@ def show_incident(incident: dict[str, Any], devices: list[dict[str, Any]]) -> No
         st.warning("Operator follow-up is pending.")
         for question in questions:
             st.markdown(f"- {question}")
-        incident_id = str(incident["incident_id"])
-        seen_dialogs = st.session_state.setdefault("hitl_dialog_seen", set())
-        requested_dialog = st.session_state.get("hitl_dialog_requested") == incident_id
-        if incident_id in seen_dialogs and not requested_dialog:
-            if st.button("Answer follow-up questions", key=f"open-hitl-{incident_id}"):
-                st.session_state["hitl_dialog_requested"] = incident_id
     nearby = incident.get("nearby_connections", [])
     if nearby:
         st.subheader("Topology-nearby watch list")
@@ -780,8 +774,7 @@ def show_incident(incident: dict[str, Any], devices: list[dict[str, Any]]) -> No
     st.link_button("Download incident report", f"{API_URL}/incidents/{incident['incident_id']}/report")
 
 
-@st.dialog("Additional information needed", width="large", on_dismiss="rerun")
-def render_human_review_dialog(
+def render_human_review_form(
     incident: dict[str, Any],
     devices: list[dict[str, Any]],
 ) -> None:
@@ -882,11 +875,9 @@ def render_human_review_dialog(
         drops = st.number_input(
             "Firewall drops (events)", min_value=0, step=1, key=f"drops-{incident_id}"
         )
-        submit, later = st.columns(2)
-        submitted = submit.form_submit_button(
+        submitted = st.form_submit_button(
             "Submit client information", type="primary", use_container_width=True
         )
-        later.form_submit_button("Answer later", use_container_width=True)
 
     if submitted:
         map_answer = {"Yes": True, "No": False, "Not sure": "unknown"}
@@ -903,15 +894,11 @@ def render_human_review_dialog(
                 f"/incidents/{incident_id}/information",
                 json={"answers": answers, "event_context": event_context},
             )
-            st.session_state["hitl_dialog_seen"].discard(incident_id)
+            st.session_state.pop("hitl_form_requested", None)
             st.success("Operator information submitted; report and event estimate were updated.")
             st.rerun()
         except requests.RequestException as error:
             st.error(f"Could not submit client information: {error}")
-    elif later:
-        st.rerun()
-
-
 AGENT_STYLES = (
     ("perform", "gauge", "#3b82f6"),
     ("infra", "cpu", "#22a06b"),
@@ -1351,28 +1338,32 @@ def render_pending_human_review(data: dict[str, Any]) -> None:
     if not pending:
         return
 
-    seen_dialogs = st.session_state.setdefault("hitl_dialog_seen", set())
-    requested_id = st.session_state.get("hitl_dialog_requested")
-    incident = next(
-        (item for item in pending if str(item["incident_id"]) == requested_id),
-        None,
+    st.warning(f"{len(pending)} incident(s) are waiting for additional information.")
+    options = {
+        f"{item['severity'].upper()} · {item['incident_id'][:12]} · {item['summary'][:65]}":
+        str(item["incident_id"])
+        for item in pending
+    }
+    incident_by_id = {str(item["incident_id"]): item for item in pending}
+    requested_id = st.session_state.pop("hitl_form_requested", None)
+    option_labels = list(options)
+    default_index = next(
+        (
+            index
+            for index, label in enumerate(option_labels)
+            if options[label] == requested_id
+        ),
+        0,
     )
-    if incident is None:
-        incident = next(
-            (item for item in pending if str(item["incident_id"]) not in seen_dialogs),
-            None,
-        )
-
-    if incident is not None:
-        incident_id = str(incident["incident_id"])
-        seen_dialogs.add(incident_id)
-        st.session_state.pop("hitl_dialog_requested", None)
-        render_human_review_dialog(incident, data.get("devices", []))
-        return
-
-    st.info(f"{len(pending)} incident(s) are waiting for additional information.")
-    if st.button("Open pending HITL questions", key="open-pending-hitl"):
-        st.session_state["hitl_dialog_requested"] = str(pending[0]["incident_id"])
+    selected = st.selectbox(
+        "Incident awaiting your information",
+        option_labels,
+        index=default_index,
+        key="pending-hitl-incident",
+    )
+    incident = incident_by_id[options[selected]]
+    with st.container(border=True):
+        render_human_review_form(incident, data.get("devices", []))
 
 
 def render_knowledge_base() -> None:

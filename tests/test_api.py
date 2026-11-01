@@ -124,6 +124,7 @@ class ApiTests(unittest.TestCase):
                         "interface_errors_present": False,
                         "recent_route_change": False,
                     },
+                    "event_context": {"event_happening": False},
                 })
                 self.assertEqual(information.status_code, 200)
                 self.assertEqual(information.json()["status"], "processed")

@@ -1,3 +1,13 @@
+PS: 
+### Blueprint Availability
+
+During the hackathon, adding more blueprints was limited by the platform’s paid plan. Rather than imply that additional blueprints were available, we built and tested the demo using the blueprint and sample data already included in the project.
+
+The demo still showcases the core workflow and simulation using that available data. We designed the system to support additional blueprints when access is available; the plan limit affected the amount of blueprint data we could include, not the intended scope of the solution.
+
+The live map,simulations,and the core functionalities work, but the workers couldnt be added due to limitation of free blueprints.
+You can refer to the demo video for the full functionalities.
+
 # NetCoop AI
 
 NetCoop AI is a network-operations demo that ingests device telemetry, evaluates it through a typed LangGraph workflow, and presents health status, diagnostic evidence, recommendations, and campus-map views.

@@ -11,7 +11,7 @@ services:
     command: python -m backend.worker
     environment:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      BACKEND_URL: http://api:8000
+      BACKEND_URL: https://netcoopai.onrender.com
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:-change-this-in-production}
       TELEMETRY_STREAM: ${TELEMETRY_STREAM:-netcoop:telemetry}
       TELEMETRY_CONSUMER_GROUP: ${TELEMETRY_CONSUMER_GROUP:-netcoop-workers}

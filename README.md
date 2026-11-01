@@ -98,6 +98,34 @@ Normalization
 
 Each agent is implemented in its own module under [`backend/agents/`](backend/agents/). Shared schemas are under [`backend/common/classes/`](backend/common/classes/).
 
+- **1. Normalization Agent** 
+ ​Validates the normalized telemetry event against the shared Pydantic TelemetryEvent model and rejects unsupported normalized metrics.
+- **​2. Performance Agent** 
+ ​Compares every supplied metric against configured normal ranges.
+​Dynamic classification: Adds metrics to classifications if levels are higher or lower than normal.
+​Analyzes past data to compute trend trajectories (whether metrics are actively rising or lowering).
+- **​3. Infrastructure Agent** 
+ ​Focuses on actionable infrastructure findings for queue drops, interface errors, and temperature, and suggests checks such as QoS/queue review, optics/cabling inspection, or rack airflow checks.
+- **​4. Health Check Agent** 
+ ​Evaluates the current event together with the recent telemetry window (up to two hours). Produces per-device status/risk summaries and identifies affected routers by device type.
+- **​5. Connectivity Agent** 
+ ​Follows declared inventory neighbor relationships to build a bounded, up-to-three-hop blast-radius and watch list. Neighbor risk decays with hop distance.
+- **​6. UTM Agent** 
+ ​Checks firewall-drop telemetry and whether client-provided UTM/firewall context is available. If evidence is missing, it contributes diagnostic questions for human review.
+- **​7. Web Research Agent** 
+ ​Skips healthy telemetry and cases matched by local rules. When enabled and no local rule matches, it queries Tavily for external references.
+- **​8. Correlation Agent** 
+​ Synthesizes inputs from local static rules, historical trends, performance classifications, topological blast-radius, and client feedback.
+​Evaluates candidate causes and assigns exact probabilities/confidence scores to possible issues while outputting probable solutions.
+- **​9. Reporting Agent** 
+ ​Holistic synthesis: Takes into account the simulation results for future overload issues, higher/lower trends, historical past data, operator-supplied extra information, static rules, web research, and nearby hopping devices/blast radius.
+​Generates typed incident reports, deterministic summaries, device statuses, and downloadable files.
+
+​## Supporting Subsystems
+- **​Monitoring Agent (Health Check)** : Exposed through GET /health. Keeps track of the health and execution status of all agents, checking API dependencies (Redis and SQLite), worker heartbeats, and run latencies.
+- **​Human-in-the-Loop (HITL) Subsystem** : Automatically asks users further questions if critical diagnostic information is missing. If the user fails to provide the info or leaves questions unanswered, the system gracefully concludes with "no fixed issue found" or similar guarded determinations.
+
+
 | Agent | Contribution |
 |---|---|
 | **Normalization Agent** | Validates the normalized telemetry event against the shared Pydantic `TelemetryEvent` model and rejects unsupported normalized metrics. Unit conversion is performed by the API before the event enters the graph. |

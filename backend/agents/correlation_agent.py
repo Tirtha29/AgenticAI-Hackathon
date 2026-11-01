@@ -1,5 +1,9 @@
 import json
+import logging
 from typing import Any
+
+from groq import APIError
+from langchain_core.exceptions import OutputParserException
 
 from backend.agents.utils import heartbeat
 from backend.common.classes.correlation import (
@@ -21,6 +25,7 @@ SCORING_WEIGHTS = {
     "topology": 0.05,
     "client_confirmation": 0.10,
 }
+logger = logging.getLogger(__name__)
 
 
 def build_cause_scoring_parser():
@@ -288,6 +293,7 @@ def correlation_agent(state: WorkflowState) -> dict[str, Any]:
     llm = state.get("llm")
     scoring_method = "groq_weighted" if llm is not None else "static_fallback"
     web_candidates: list[ProbableCause] = []
+    scoring_error: str | None = None
     web_research = state.get("web_research", {})
     should_score_web_research = (
         web_research.get("status") == "searched"
@@ -311,12 +317,27 @@ def correlation_agent(state: WorkflowState) -> dict[str, Any]:
             },
             "web_research": web_research,
         }
-        causes, web_candidates = _score_with_groq(
-            llm,
-            candidates,
-            context,
-            web_research,
-        )
+        try:
+            causes, web_candidates = _score_with_groq(
+                llm,
+                candidates,
+                context,
+                web_research,
+            )
+        except (APIError, OutputParserException) as error:
+            logger.warning(
+                "Groq cause scoring failed (%s); using static fallback scores.",
+                type(error).__name__,
+            )
+            scoring_method = "static_fallback"
+            scoring_error = (
+                f"Groq scoring failed ({type(error).__name__}); "
+                "the report uses documented static fallback scores."
+            )
+            causes = [
+                cause for cause in candidates
+                if not cause.missing_evidence
+            ]
     else:
         causes = [
             cause for cause in candidates
@@ -363,7 +384,8 @@ def correlation_agent(state: WorkflowState) -> dict[str, Any]:
             "Groq scored the candidate causes using weighted telemetry, severity, history, "
             "topology, and client evidence."
             if scoring_method == "groq_weighted"
-            else "Groq scoring is disabled; candidates retain their documented static fallback scores."
+            else scoring_error
+            or "Groq scoring is disabled; candidates retain their documented static fallback scores."
         ),
     )
     return {"correlation": output.model_dump(), **heartbeat("Correlation Agent")}

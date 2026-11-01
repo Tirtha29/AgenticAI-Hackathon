@@ -1,4 +1,8 @@
+import logging
 from typing import Any
+
+from groq import APIError
+from langchain_core.exceptions import OutputParserException
 
 from backend.agents.utils import heartbeat
 from backend.common.classes.performance import MetricFinding
@@ -6,6 +10,8 @@ from backend.common.classes.report import IncidentReport, ReportNarrative
 from backend.common.classes.web_research import WebResearchOutput
 from backend.common.classes.workflow_state import WorkflowState
 from backend.common.metrics import METRIC_UNITS
+
+logger = logging.getLogger(__name__)
 
 
 def build_report_parser():
@@ -83,8 +89,8 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
     )
     if correlation["scoring_method"] == "static_fallback":
         limitations = (
-            "Groq scoring was not configured; cause scores use static fallback values and are "
-            "not calibrated statistical forecasts. Connection-hop risk is a topology heuristic, "
+            f"{correlation['explanation']} Cause scores are not calibrated statistical forecasts. "
+            "Connection-hop risk is a topology heuristic, "
             "not evidence that a neighboring device has failed."
         )
     if event_simulation:
@@ -95,7 +101,7 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
     web_research = state.get("web_research", {})
     if web_research.get("status") == "searched":
         limitations += " External search results are references only and may be outdated or unrelated."
-    if state.get("llm") is not None:
+    if state.get("llm") is not None and correlation["scoring_method"] != "static_fallback":
         from langchain_core.prompts import ChatPromptTemplate
 
         parser = build_report_parser()
@@ -109,26 +115,37 @@ def report_agent(state: WorkflowState) -> dict[str, Any]:
             ),
             ("human", "Report data: {report_data}"),
         ])
-        narrative: ReportNarrative = (prompt | state["llm"] | parser).invoke({
-            "format_instructions": parser.get_format_instructions(),
-            "report_data": {
-                "severity": performance["severity"],
-                "conclusion": correlation["status"],
-                "verified_causes": ranked,
-                "questions": correlation["questions"],
-                "telemetry": telemetry["metrics"],
-                "web_research": web_research,
-                "event_context": event_context,
-                "event_simulation_summary": event_simulation["summary"] if event_simulation else None,
-            },
-        })
-        summary = narrative.summary
-        limitations = narrative.limitations
-        if event_simulation:
-            limitations += (
-                " Event simulation is a deterministic what-if estimate using assumed device capacities "
-                "and traffic rates; event coordinates are operator-provided context and do not locate devices."
+        try:
+            narrative: ReportNarrative = (prompt | state["llm"] | parser).invoke({
+                "format_instructions": parser.get_format_instructions(),
+                "report_data": {
+                    "severity": performance["severity"],
+                    "conclusion": correlation["status"],
+                    "verified_causes": ranked,
+                    "questions": correlation["questions"],
+                    "telemetry": telemetry["metrics"],
+                    "web_research": web_research,
+                    "event_context": event_context,
+                    "event_simulation_summary": event_simulation["summary"] if event_simulation else None,
+                },
+            })
+        except (APIError, OutputParserException) as error:
+            logger.warning(
+                "Groq report narrative failed (%s); retaining deterministic report text.",
+                type(error).__name__,
             )
+            limitations += (
+                f" Groq report narrative failed ({type(error).__name__}); "
+                "deterministic report text is shown."
+            )
+        else:
+            summary = narrative.summary
+            limitations = narrative.limitations
+            if event_simulation:
+                limitations += (
+                    " Event simulation is a deterministic what-if estimate using assumed device capacities "
+                    "and traffic rates; event coordinates are operator-provided context and do not locate devices."
+                )
 
     map_statuses = {item["device_id"]: item for item in health["device_statuses"]}
     questions = list(correlation["questions"])

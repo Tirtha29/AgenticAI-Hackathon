@@ -187,6 +187,38 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(report["scoring_method"], "static_fallback")
         self.assertEqual(sum(report["scoring_weights"].values()), 1)
 
+    def test_graph_falls_back_to_static_scores_when_groq_api_fails(self):
+        import httpx
+        from groq import APIError
+
+        event = normalize_payload(TelemetryIn(
+            device_id="RTR_CAMPUS_1",
+            metrics={
+                "cpu_utilization_pct": 99.9,
+                "packet_loss_pct": 22,
+                "interface_errors": 120,
+            },
+        ))
+        groq_error = APIError(
+            "Configured model is unavailable",
+            request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions"),
+            body=None,
+        )
+        with patch(
+            "backend.agents.correlation_agent._score_with_groq",
+            side_effect=groq_error,
+        ):
+            report = run_workflow(
+                event,
+                {"device_id": "RTR_CAMPUS_1", "device_type": "router"},
+                llm=object(),
+            )
+
+        self.assertEqual(report["severity"], "critical")
+        self.assertEqual(report["scoring_method"], "static_fallback")
+        self.assertTrue(report["probable_causes"])
+        self.assertIn("Groq scoring failed", report["limitations"])
+
     def test_answered_high_confidence_case_is_ranked_and_verified(self):
         event = normalize_payload(TelemetryIn(
             device_id="RTR_CAMPUS_1",

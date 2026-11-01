@@ -310,6 +310,45 @@ h1,h2,h3,h4{color:var(--ink);letter-spacing:-.02em;}
 """
 st.markdown("<style>" + CSS + nav_icon_css() + "</style>", unsafe_allow_html=True)
 
+DARK_THEME_CSS = """
+:root{color-scheme:dark;--ink:#e6eaf5;--muted:#a3aec5;--line:#30394d;}
+.stApp,[data-testid="stAppViewContainer"]{background:#0d1220 !important;color:#e6eaf5 !important;}
+.stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp p,.stApp label,.stApp [data-testid="stMarkdownContainer"]{color:#e6eaf5;}
+.stApp [data-testid="stCaptionContainer"],.stApp [data-testid="stCaptionContainer"] p{color:#a3aec5 !important;}
+[data-testid="stSidebar"]{background:linear-gradient(180deg,#121a2a,#17162b) !important;border-color:#30394d !important;}
+[data-testid="stSidebar"] .brand-name,[data-testid="stSidebar"] .sh-title,[data-testid="stSidebar"] .sh-val{color:#e6eaf5 !important;}
+[data-testid="stSidebar"] .brand-tag,[data-testid="stSidebar"] .sh-sub{color:#a3aec5 !important;}
+[data-testid="stSidebar"] [data-testid="stRadio"] label{color:#d5dced;}
+[data-testid="stVerticalBlockBorderWrapper"]{background:linear-gradient(150deg,#171f30,#171a2a) !important;border-color:#30394d !important;}
+[data-testid="stMetric"]{background:linear-gradient(145deg,#1d2638,#211e35) !important;border-color:#30394d !important;}
+[data-testid="stMetricLabel"],[data-testid="stMetricValue"]{color:#e6eaf5 !important;}
+[data-testid="stExpander"] details,[data-testid="stPopover"]{background:#171f30 !important;border-color:#30394d !important;}
+[data-testid="stTextInput"] input,[data-testid="stNumberInput"] input,[data-testid="stTextArea"] textarea,
+[data-baseweb="select"] > div,[data-baseweb="input"]{background:#111827 !important;color:#e6eaf5 !important;border-color:#3a465e !important;}
+[data-baseweb="popover"],[role="listbox"]{background:#171f30 !important;color:#e6eaf5 !important;}
+[role="option"]{color:#e6eaf5 !important;}
+[data-testid="stDataFrame"],[data-testid="stTable"]{filter:brightness(.86) saturate(.9);}
+[data-testid="stAlert"]{background:#1b2435 !important;color:#e6eaf5 !important;}
+[data-testid="stTabs"] button{color:#c6cfe0 !important;}
+[data-testid="stDialog"] [role="dialog"]{background:#171f30 !important;color:#e6eaf5 !important;}
+.topbar{background:radial-gradient(ellipse at 85% 10%,rgba(36,94,77,.45) 0,transparent 42%),radial-gradient(ellipse at 20% 0%,rgba(70,58,125,.5) 0,transparent 46%),linear-gradient(105deg,#1b2434,#211e35 52%,#302128) !important;border-color:#394258 !important;}
+.tb-title,.pt-title,.dl-row,.kb-row,.incident-title{color:#e6eaf5 !important;}
+.tb-sub,.legend,.small-muted,.incident-head,.incident-meta{color:#a3aec5 !important;}
+.side-health{background:linear-gradient(160deg,#1b2535,#211e35) !important;border-color:#30394d !important;}
+.incident-card{background:linear-gradient(100deg,#1a2031,#171f30 75%) !important;border-color:#30394d !important;}
+.incident-card.sev-critical{background:linear-gradient(100deg,#382222,#171f30 75%) !important;}
+.incident-card.sev-warning{background:linear-gradient(100deg,#382f1b,#171f30 75%) !important;}
+.incident-card.sev-resolved{background:linear-gradient(100deg,#1b332a,#171f30 75%) !important;}
+.qa-chip{background:#25243d;border-color:#403b64;color:#c6cfe0;}
+.help-card{background:linear-gradient(160deg,#292443,#24213b);color:#e6eaf5;}
+.help-card .hc-text{color:#b4bdd0;}
+"""
+
+
+def apply_theme() -> None:
+    if st.session_state.get("dark_theme", False):
+        st.markdown(f"<style>{DARK_THEME_CSS}</style>", unsafe_allow_html=True)
+
 
 def api_get(path: str, **params: Any) -> Any:
     response = requests.get(f"{API_URL}{path}", params=params or None, timeout=60)
@@ -669,103 +708,13 @@ def show_incident(incident: dict[str, Any], devices: list[dict[str, Any]]) -> No
         st.warning("Operator follow-up is pending.")
         for question in questions:
             st.markdown(f"- {question}")
-        with st.form(f"information-{incident['incident_id']}"):
-            event_context: dict[str, Any] | None = None
-            if incident.get("event_context") is None:
-                event_answer = st.radio(
-                    "Is a crowd-gathering event happening?",
-                    ["No", "Yes"],
-                    horizontal=True,
-                    key=f"event-happening-{incident['incident_id']}",
-                )
-                event_context = {"event_happening": event_answer == "Yes"}
-                if event_answer == "Yes":
-                    st.caption(
-                        "Enter the event coordinates and select the network device serving that area. "
-                        "Coordinates are recorded for context; impact is propagated through topology links."
-                    )
-                    label_to_id = {
-                        f"{device['device_id']} · {device.get('name') or device['device_id']}": device["device_id"]
-                        for device in devices
-                    }
-                    if not label_to_id:
-                        st.error("Load or upload the device topology before simulating an event.")
-                        label_to_id = {incident["device_id"]: incident["device_id"]}
-                    event_type = st.selectbox(
-                        "Event type",
-                        ["festival", "sports", "livestream", "exam", "outage"],
-                        key=f"event-type-{incident['incident_id']}",
-                    )
-                    anchor_label = st.selectbox(
-                        "Serving / anchor device",
-                        list(label_to_id),
-                        key=f"event-anchor-{incident['incident_id']}",
-                    )
-                    latitude_col, longitude_col = st.columns(2)
-                    latitude = latitude_col.number_input(
-                        "Event latitude",
-                        min_value=-90.0,
-                        max_value=90.0,
-                        value=0.0,
-                        format="%.6f",
-                        key=f"event-lat-{incident['incident_id']}",
-                    )
-                    longitude = longitude_col.number_input(
-                        "Event longitude",
-                        min_value=-180.0,
-                        max_value=180.0,
-                        value=0.0,
-                        format="%.6f",
-                        key=f"event-lon-{incident['incident_id']}",
-                    )
-                    attendance = st.number_input(
-                        "Expected attendance",
-                        min_value=1,
-                        max_value=500_000,
-                        value=5000,
-                        step=100,
-                        key=f"event-attendance-{incident['incident_id']}",
-                    )
-                    radius_hops = st.slider(
-                        "Topology impact radius (hops)",
-                        1,
-                        3,
-                        2,
-                        key=f"event-hops-{incident['incident_id']}",
-                    )
-                    event_context.update({
-                        "event_type": event_type,
-                        "anchor_device_id": label_to_id[anchor_label],
-                        "latitude": latitude,
-                        "longitude": longitude,
-                        "attendance": attendance,
-                        "radius_hops": radius_hops,
-                    })
-            firewall_alert = st.selectbox("Firewall or UTM alert?", ["Not sure", "No", "Yes"], key=f"utm-{incident['incident_id']}")
-            firewall_change = st.selectbox("Recent firewall policy change?", ["Not sure", "No", "Yes"], key=f"fw-{incident['incident_id']}")
-            interface_errors = st.selectbox("Are interface/CRC errors increasing?", ["Not sure", "No", "Yes"], key=f"crc-{incident['incident_id']}")
-            route_change = st.selectbox("Recent routing/QoS change?", ["Not sure", "No", "Yes"], key=f"route-{incident['incident_id']}")
-            include_drops = st.checkbox("Include an exact firewall drop count", key=f"include-drops-{incident['incident_id']}")
-            drops = st.number_input("Firewall drops (events)", min_value=0, step=1, key=f"drops-{incident['incident_id']}")
-            if st.form_submit_button("Submit client information"):
-                map_answer = {"Yes": True, "No": False, "Not sure": "unknown"}
-                answers: dict[str, Any] = {
-                    "utm_alerts": map_answer[firewall_alert],
-                    "recent_firewall_change": map_answer[firewall_change],
-                    "interface_errors_present": map_answer[interface_errors],
-                    "recent_route_change": map_answer[route_change],
-                }
-                if include_drops:
-                    answers["firewall_drops"] = drops
-                try:
-                    api_post(
-                        f"/incidents/{incident['incident_id']}/information",
-                        json={"answers": answers, "event_context": event_context},
-                    )
-                    st.success("Operator information submitted; report and event estimate were updated.")
-                    st.rerun()
-                except requests.RequestException as error:
-                    st.error(f"Could not submit client information: {error}")
+        incident_id = str(incident["incident_id"])
+        seen_dialogs = st.session_state.setdefault("hitl_dialog_seen", set())
+        requested_dialog = st.session_state.get("hitl_dialog_requested") == incident_id
+        if incident_id in seen_dialogs and not requested_dialog:
+            if st.button("Answer follow-up questions", key=f"open-hitl-{incident_id}"):
+                st.session_state["hitl_dialog_requested"] = incident_id
+                st.rerun()
     nearby = incident.get("nearby_connections", [])
     if nearby:
         st.subheader("Topology-nearby watch list")
@@ -830,6 +779,138 @@ def show_incident(incident: dict[str, Any], devices: list[dict[str, Any]]) -> No
         with st.expander("Full event simulation data"):
             st.json(simulation)
     st.link_button("Download incident report", f"{API_URL}/incidents/{incident['incident_id']}/report")
+
+
+@st.dialog("Additional information needed", width="large", on_dismiss="rerun")
+def render_human_review_dialog(
+    incident: dict[str, Any],
+    devices: list[dict[str, Any]],
+) -> None:
+    incident_id = str(incident["incident_id"])
+    st.write("The diagnostic agents need a few details to verify likely causes.")
+    for question in incident.get("human_questions", []):
+        st.markdown(f"- {question}")
+
+    with st.form(f"information-{incident_id}"):
+        event_context: dict[str, Any] | None = None
+        if incident.get("event_context") is None:
+            event_answer = st.radio(
+                "Is a crowd-gathering event happening?",
+                ["No", "Yes"],
+                horizontal=True,
+                key=f"event-happening-{incident_id}",
+            )
+            event_context = {"event_happening": event_answer == "Yes"}
+            if event_answer == "Yes":
+                st.caption(
+                    "Enter the event coordinates and select the network device serving that area. "
+                    "Coordinates are recorded for context; impact is propagated through topology links."
+                )
+                label_to_id = {
+                    f"{device['device_id']} · {device.get('name') or device['device_id']}": device["device_id"]
+                    for device in devices
+                }
+                if not label_to_id:
+                    st.error("Load or upload the device topology before simulating an event.")
+                    label_to_id = {incident["device_id"]: incident["device_id"]}
+                event_type = st.selectbox(
+                    "Event type",
+                    ["festival", "sports", "livestream", "exam", "outage"],
+                    key=f"event-type-{incident_id}",
+                )
+                anchor_label = st.selectbox(
+                    "Serving / anchor device",
+                    list(label_to_id),
+                    key=f"event-anchor-{incident_id}",
+                )
+                latitude_col, longitude_col = st.columns(2)
+                latitude = latitude_col.number_input(
+                    "Event latitude",
+                    min_value=-90.0,
+                    max_value=90.0,
+                    value=0.0,
+                    format="%.6f",
+                    key=f"event-lat-{incident_id}",
+                )
+                longitude = longitude_col.number_input(
+                    "Event longitude",
+                    min_value=-180.0,
+                    max_value=180.0,
+                    value=0.0,
+                    format="%.6f",
+                    key=f"event-lon-{incident_id}",
+                )
+                attendance = st.number_input(
+                    "Expected attendance",
+                    min_value=1,
+                    max_value=500_000,
+                    value=5000,
+                    step=100,
+                    key=f"event-attendance-{incident_id}",
+                )
+                radius_hops = st.slider(
+                    "Topology impact radius (hops)",
+                    1,
+                    3,
+                    2,
+                    key=f"event-hops-{incident_id}",
+                )
+                event_context.update({
+                    "event_type": event_type,
+                    "anchor_device_id": label_to_id[anchor_label],
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "attendance": attendance,
+                    "radius_hops": radius_hops,
+                })
+
+        answer_options = ["Not sure", "No", "Yes"]
+        firewall_alert = st.selectbox(
+            "Firewall or UTM alert?", answer_options, key=f"utm-{incident_id}"
+        )
+        firewall_change = st.selectbox(
+            "Recent firewall policy change?", answer_options, key=f"fw-{incident_id}"
+        )
+        interface_errors = st.selectbox(
+            "Are interface/CRC errors increasing?", answer_options, key=f"crc-{incident_id}"
+        )
+        route_change = st.selectbox(
+            "Recent routing/QoS change?", answer_options, key=f"route-{incident_id}"
+        )
+        include_drops = st.checkbox(
+            "Include an exact firewall drop count", key=f"include-drops-{incident_id}"
+        )
+        drops = st.number_input(
+            "Firewall drops (events)", min_value=0, step=1, key=f"drops-{incident_id}"
+        )
+        submit, later = st.columns(2)
+        submitted = submit.form_submit_button(
+            "Submit client information", type="primary", use_container_width=True
+        )
+        later.form_submit_button("Answer later", use_container_width=True)
+
+    if submitted:
+        map_answer = {"Yes": True, "No": False, "Not sure": "unknown"}
+        answers: dict[str, Any] = {
+            "utm_alerts": map_answer[firewall_alert],
+            "recent_firewall_change": map_answer[firewall_change],
+            "interface_errors_present": map_answer[interface_errors],
+            "recent_route_change": map_answer[route_change],
+        }
+        if include_drops:
+            answers["firewall_drops"] = drops
+        try:
+            api_post(
+                f"/incidents/{incident_id}/information",
+                json={"answers": answers, "event_context": event_context},
+            )
+            st.session_state["hitl_dialog_seen"].discard(incident_id)
+            st.success("Operator information submitted; report and event estimate were updated.")
+            st.rerun()
+        except requests.RequestException as error:
+            st.error(f"Could not submit client information: {error}")
+    elif later:
+        st.rerun()
 
 
 AGENT_STYLES = (
@@ -911,6 +992,7 @@ def render_sidebar() -> tuple[str, str | None]:
         pass
     with st.sidebar:
         md(f'<div class="brand">{logo_svg(64)}<div class="brand-name">NetCoop AI</div><div class="brand-tag">Smart Network<br>Intelligence</div></div>')
+        st.toggle("Dark theme", key="dark_theme", help="Switch the dashboard to a dark color scheme.")
         page = st.radio("Navigation", PAGES, key="nav_page", label_visibility="collapsed")
 
         inventory = None
@@ -1261,6 +1343,40 @@ def render_incidents(data: dict[str, Any]) -> None:
         show_incident(incident, data.get("devices", []))
 
 
+def render_pending_human_review(data: dict[str, Any]) -> None:
+    pending = [
+        incident
+        for incident in data.get("incidents", [])
+        if incident.get("human_questions")
+    ]
+    if not pending:
+        return
+
+    seen_dialogs = st.session_state.setdefault("hitl_dialog_seen", set())
+    requested_id = st.session_state.get("hitl_dialog_requested")
+    incident = next(
+        (item for item in pending if str(item["incident_id"]) == requested_id),
+        None,
+    )
+    if incident is None:
+        incident = next(
+            (item for item in pending if str(item["incident_id"]) not in seen_dialogs),
+            None,
+        )
+
+    if incident is not None:
+        incident_id = str(incident["incident_id"])
+        seen_dialogs.add(incident_id)
+        st.session_state.pop("hitl_dialog_requested", None)
+        render_human_review_dialog(incident, data.get("devices", []))
+        return
+
+    st.info(f"{len(pending)} incident(s) are waiting for additional information.")
+    if st.button("Open pending HITL questions", key="open-pending-hitl"):
+        st.session_state["hitl_dialog_requested"] = str(pending[0]["incident_id"])
+        st.rerun()
+
+
 def render_knowledge_base() -> None:
     query = st.text_input("Search causes, metrics, device roles, vendor contexts, or actions", placeholder="e.g. latency, router, interface errors")
     try:
@@ -1341,6 +1457,7 @@ def render_settings(health: dict[str, Any]) -> None:
 
 def main() -> None:
     page, _ = render_sidebar()
+    apply_theme()
     try:
         health = api_get("/health")
         data = api_get("/overview")
@@ -1378,6 +1495,7 @@ def main() -> None:
         render_analytics(data)
     elif page == "Settings":
         render_settings(health)
+    render_pending_human_review(data)
 
 
 main()

@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - fallback when pydeck is absent
     pdk = None
 
 load_dotenv()
-API_URL = os.getenv("API_URL", "https://netcoop-ai-10av.onrender.com").rstrip("/")
+API_URL = os.getenv("API_URL", "https://netcoopai.onrender.com").rstrip("/")
 CAMPUS_MAP_URL = os.getenv(
     "CAMPUS_MAP_URL",
     "https://netcoopai-campus-map.onrender.com",

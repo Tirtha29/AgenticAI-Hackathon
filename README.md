@@ -424,6 +424,9 @@ The API validates the answers, combines them with previous answers, re-runs the 
 
 ## Dashboard and maps
 
+<img width="1024" height="589" alt="image" src="https://github.com/user-attachments/assets/79cb42bd-ecca-4ac5-a340-a9818f6031a8" />
+
+
 The Streamlit app includes:
 
 - Overview KPIs and health distribution.
@@ -436,7 +439,7 @@ The Streamlit app includes:
 - Searchable static diagnostic rule/fact catalog.
 - Analytics, unit settings, and a dark-theme toggle.
 
-The 3D map is a **separate web application**. The Streamlit dashboard sends the current inventory/status snapshot to the map service and embeds the returned inventory view in an iframe. Because an iframe runs in the user's browser, `localhost` only works when the dashboard and browser are on the same machine. For cloud deployment, the map service must have a public HTTPS URL and `CAMPUS_MAP_URL` must point to it.
+The 3D map is a **separate web application**. The Streamlit dashboard sends the current inventory/status snapshot to the map service and embeds the returned inventory view in an iframe. Because an iframe runs in the user's browser, `localhost` only works when the dashboard and browser are on the same machine. For cloud deployment, the map service must have a public HTTPS URL and `CAMPUS_MAP_URL` must point to it. Devices will be displayed on the map based on their telemetry data, and the map will keep updating as new data is received.
 
 The map service exposes `/api/buildings` as its Render health-check endpoint and `/api/inventory/{inventory_id}` for map snapshots. If the hosted map service is unavailable, the dashboard warns and uses its available fallback rendering path where applicable.
 

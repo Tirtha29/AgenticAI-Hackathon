@@ -61,6 +61,7 @@ flowchart LR
     Dashboard -->|Upload current map snapshot| Map[3D campus-map service]
     Dashboard -->|Embed map iframe| Map
 ```
+<img width="568" height="295" alt="image" src="https://github.com/user-attachments/assets/2d4039e5-8927-4ea0-9ee8-bb5b87cc1517" />
 
 ### Telemetry lifecycle
 

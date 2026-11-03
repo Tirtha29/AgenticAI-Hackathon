@@ -45,22 +45,6 @@ The application is made up of:
 
 ## How the application works
 
-```mermaid
-flowchart LR
-    Operator[Operator / telemetry producer] -->|Inventory CSV or JSON| API[FastAPI]
-    Operator -->|POST telemetry| API
-    API -->|Persist event| DB[(SQLite)]
-    API -->|Append event| Stream[(Redis Streams)]
-    Stream --> Worker[Python worker]
-    Worker -->|Authenticated internal request| API
-    API --> Graph[LangGraph diagnostic workflow]
-    Graph --> Agents[Normalization → Performance → Infrastructure → Health → Connectivity → UTM → Research → Correlation → Reporting]
-    Graph -->|Report and device statuses| DB
-    API -->|Broadcast event| WS[WebSocket /ws/events]
-    Dashboard[Streamlit dashboard] -->|REST overview, inventory, reports| API
-    Dashboard -->|Upload current map snapshot| Map[3D campus-map service]
-    Dashboard -->|Embed map iframe| Map
-```
 <img width="568" height="295" alt="image" src="https://github.com/user-attachments/assets/2d4039e5-8927-4ea0-9ee8-bb5b87cc1517" />
 
 ### Telemetry lifecycle
